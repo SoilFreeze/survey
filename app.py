@@ -157,40 +157,70 @@ if category == "Database Maintenance":
                 upload_to_bq(df_dh, "sensorpush-export.survey.surveys")
                 st.success(f"Uploaded survey data for {file_date}")
 
-    # --- NEW: MANAGE DATA (DELETION TOOLS) ---
+# --- MANAGE DATA (DELETION & PROJECT REMOVAL) ---
     elif action == "Manage Data":
-        st.subheader("🗑️ Data Management")
+        st.subheader("🗑️ Data & Project Management")
+        
+        # 1. DELETE ENTIRE PROJECT (DANGER ZONE)
+        with st.expander("⚠️ DANGER ZONE: Delete Project"):
+            st.warning(f"This will permanently delete the project '{active_proj['name']}' and ALL associated holes and surveys.")
+            
+            # Confirmation text to prevent accidental clicks
+            confirm_text = st.text_input(f"Type '{active_proj['name']}' to confirm deletion")
+            
+            if st.button("DELETE PROJECT PERMANENTLY"):
+                if confirm_text == active_proj['name']:
+                    with st.spinner("Deleting all project data..."):
+                        p_id = active_proj['project_id']
+                        # 1. Delete Surveys
+                        client.query(f"DELETE FROM `sensorpush-export.survey.surveys` WHERE project_id='{p_id}'").result()
+                        # 2. Delete Holes
+                        client.query(f"DELETE FROM `sensorpush-export.survey.holes` WHERE project_id='{p_id}'").result()
+                        # 3. Delete Project Definition
+                        client.query(f"DELETE FROM `sensorpush-export.survey.projects` WHERE project_id='{p_id}'").result()
+                        
+                        st.success(f"Project '{active_proj['name']}' deleted.")
+                        st.rerun()
+                else:
+                    st.error("Project name does not match. Deletion cancelled.")
+
+        st.divider()
+
+        # 2. SELECTIVE DELETION TABS
         tab1, tab2 = st.tabs(["Delete by Hole", "Delete by Date"])
         
         with tab1:
-            h_id = st.text_input("Hole ID to Clear")
+            h_id = st.text_input("Enter Hole ID to clear")
             if st.button("Clear Hole"):
-                # Reset actuals and delete surveys
-                client.query(f"UPDATE `sensorpush-export.survey.holes` SET actual_n=NULL, actual_e=NULL WHERE hole_id='{h_id}' AND project_id='{active_proj['project_id']}'")
-                client.query(f"DELETE FROM `sensorpush-export.survey.surveys` WHERE hole_id='{h_id}' AND project_id='{active_proj['project_id']}'")
-                st.warning(f"Data cleared for {h_id}")
+                client.query(f"UPDATE `sensorpush-export.survey.holes` SET actual_n=NULL, actual_e=NULL WHERE hole_id='{h_id}' AND project_id='{active_proj['project_id']}'").result()
+                client.query(f"DELETE FROM `sensorpush-export.survey.surveys` WHERE hole_id='{h_id}' AND project_id='{active_proj['project_id']}'").result()
+                st.warning(f"Cleared records for {h_id}")
 
         with tab2:
-            # Fetch dates present in DB for easy selection
             date_q = f"SELECT DISTINCT survey_date FROM `sensorpush-export.survey.surveys` WHERE project_id='{active_proj['project_id']}'"
             db_dates = run_query(date_q)
             if not db_dates.empty:
                 target_date = st.selectbox("Select Date to Wipe", db_dates['survey_date'].tolist())
                 if st.button("Confirm Delete All for Date"):
-                    client.query(f"DELETE FROM `sensorpush-export.survey.surveys` WHERE survey_date='{target_date}' AND project_id='{active_proj['project_id']}'")
-                    st.error(f"Deleted all records for {target_date}")
+                    client.query(f"DELETE FROM `sensorpush-export.survey.surveys` WHERE survey_date='{target_date}' AND project_id='{active_proj['project_id']}'").result()
+                    st.error(f"Deleted records for {target_date}")
 
+# ==========================================
+# 5. VISUALIZATION
+# ==========================================
 # ==========================================
 # 5. VISUALIZATION
 # ==========================================
 elif category == "Visualization":
     view = st.radio("View", ["Whole Site Map", "Single Hole Analysis", "Elevation Slice"], horizontal=True)
     
-    if active_proj:
+    # FIX: Use 'is not None' to avoid Pandas ambiguity
+    if active_proj is not None:
         q = f"""SELECT h.*, s.depth, s.azimuth, s.inclination FROM `sensorpush-export.survey.holes` h 
                 LEFT JOIN `sensorpush-export.survey.surveys` s ON h.hole_id = s.hole_id 
                 WHERE h.project_id = '{active_proj['project_id']}'"""
         df_viz = run_query(q)
+
         if active_phase != "All Phases": df_viz = df_viz[df_viz['phase'] == active_phase]
 
         if view == "Single Hole Analysis":
