@@ -32,14 +32,14 @@ def upload_to_bq(df, table_id, write_mode="WRITE_APPEND"):
     
    
 # ==========================================
-# 2. MATH ENGINE (Standardized to 'length')
+# 2. MATH ENGINE (Standardized to 'depth')
 # ==========================================
 def calculate_survey_path(df, start_n, start_e):
-    # Sort by length for the calculation
-    df = df.sort_values('length')
+    # Sort by depth for the calculation
+    df = df.sort_values('depth')
     rad_az = np.radians(df['azimuth'])
     rad_inc = np.radians(df['inclination'])
-    dist = df['length'].diff().fillna(0)
+    dist = df['depth'].diff().fillna(0)
     
     dn = dist * np.sin(rad_inc) * np.cos(rad_az)
     de = dist * np.sin(rad_inc) * np.sin(rad_az)
@@ -88,11 +88,11 @@ if category == "Database Maintenance":
             st.subheader("1. Setup New Project")
             n_id = st.text_input("Project ID")
             n_name = st.text_input("Project Name")
-            n_len = st.number_input("Standard Pipe Length (ft)", value=100.0)
+            n_len = st.number_input("Standard Pipe depth (ft)", value=100.0)
             n_on = st.number_input("Origin Northing", format="%.3f")
             n_oe = st.number_input("Origin Easting", format="%.3f")
             if st.form_submit_button("Save Project"):
-                df_new = pd.DataFrame([{'project_id':n_id, 'name':n_name, 'default_length':n_len, 'origin_north':n_on, 'origin_east':n_oe}])
+                df_new = pd.DataFrame([{'project_id':n_id, 'name':n_name, 'default_depth':n_len, 'origin_north':n_on, 'origin_east':n_oe}])
                 upload_to_bq(df_new, "sensorpush-export.survey.projects")
                 st.success("Project Saved.")
                 st.rerun()
@@ -106,14 +106,14 @@ if category == "Database Maintenance":
             rename_map = {
                 'pipe':'hole_id', 'id':'hole_id', 'hole':'hole_id',
                 'north':'design_n', 'east':'design_e', 'elev':'design_z',
-                'inc':'design_inc', 'az':'design_az', 'len':'design_length', 'length':'design_length'
+                'inc':'design_inc', 'az':'design_az', 'len':'design_depth', 'depth':'design_depth'
             }
             df_base = df_base.rename(columns=rename_map).dropna(subset=['hole_id'])
             db_schema = {
                 'project_id': str(active_proj['project_id']), 'hole_id': None,
                 'design_n': 0.0, 'design_e': 0.0, 'design_z': 0.0, 'phase': "Phase1",
                 'pipe_type': "Freeze Pipe", 'design_inc': 0.0, 'design_az': 0.0, 
-                'design_length': active_proj.get('default_length', 100.0)
+                'design_depth': active_proj.get('default_depth', 100.0)
             }
             for col, default in db_schema.items():
                 if col not in df_base.columns: df_base[col] = default
@@ -147,19 +147,19 @@ if category == "Database Maintenance":
             f_date = get_smart_date(dh_file.name)
             st.info(f"📅 Detected Survey Date: **{f_date}**")
             
-            req_cols = ['hole_id', 'length', 'azimuth', 'inclination']
+            req_cols = ['hole_id', 'depth', 'azimuth', 'inclination']
             if all(c in df_processed.columns for c in req_cols):
                 # Metadata
                 df_processed['project_id'] = str(active_proj['project_id'])
                 df_processed['survey_date'] = f_date
                 
-                st.success("✅ Headers physically changed to 'length' in memory.")
+                st.success("✅ Headers physically changed to 'depth' in memory.")
                 st.write("### New File Preview")
                 st.dataframe(df_processed[req_cols].head())
 
                 if st.button("🚀 Upload to BigQuery"):
                     try:
-                        final_cols = ['project_id', 'hole_id', 'length', 'azimuth', 'inclination', 'survey_date']
+                        final_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
                         upload_to_bq(df_processed[final_cols], "sensorpush-export.survey.surveys")
                         st.success("BigQuery Upload Successful.")
                     except Exception as e:
@@ -174,7 +174,7 @@ if category == "Database Maintenance":
 elif category == "Visualization":
     view = st.radio("View Type", ["Whole Site Map", "Single Hole Analysis", "Elevation Slice"], horizontal=True)
     if active_proj is not None:
-        q = f"""SELECT h.*, s.length as length, s.azimuth, s.inclination 
+        q = f"""SELECT h.*, s.depth as depth, s.azimuth, s.inclination 
                 FROM `sensorpush-export.survey.holes` h 
                 LEFT JOIN `sensorpush-export.survey.surveys` s ON h.hole_id = s.hole_id 
                 WHERE h.project_id = '{active_proj['project_id']}'"""
@@ -187,7 +187,7 @@ elif category == "Visualization":
             df_viz['n_rel'] = df_viz['design_n'] - active_proj['origin_north']
             df_viz['e_rel'] = df_viz['design_e'] - active_proj['origin_east']
             df_viz['has_top'] = df_viz['actual_n'].notnull() & (df_viz['actual_n'] != 0)
-            df_viz['has_downhole'] = df_viz['length'].notnull()
+            df_viz['has_downhole'] = df_viz['depth'].notnull()
             
             fig = go.Figure()
             # Battered tails
@@ -211,7 +211,7 @@ elif category == "Visualization":
             st.plotly_chart(fig, use_container_width=True)
 
         elif view == "Single Hole Analysis":
-            surveyed_ids = df_viz.dropna(subset=['length'])['hole_id'].unique()
+            surveyed_ids = df_viz.dropna(subset=['depth'])['hole_id'].unique()
             if len(surveyed_ids) > 0:
                 target = st.selectbox("Select Hole", sorted(surveyed_ids))
                 df_h = df_viz[df_viz['hole_id'] == target].copy()
@@ -219,9 +219,9 @@ elif category == "Visualization":
                 start_e = df_h['actual_e'].iloc[0] if pd.notnull(df_h['actual_e'].iloc[0]) and df_h['actual_e'].iloc[0] != 0 else df_h['design_e'].iloc[0]
                 processed = calculate_survey_path(df_h, start_n - active_proj['origin_north'], start_e - active_proj['origin_east'])
                 fig = make_subplots(rows=1, cols=2, subplot_titles=("East Dev", "North Dev"))
-                fig.add_trace(go.Scatter(x=processed['e_rel'], y=processed['length'], name="East", line=dict(color='blue')), row=1, col=1)
-                fig.add_trace(go.Scatter(x=processed['n_rel'], y=processed['length'], name="North", line=dict(color='red')), row=1, col=2)
-                fig.update_yaxes(autorange="reversed", title="Length (ft)")
+                fig.add_trace(go.Scatter(x=processed['e_rel'], y=processed['depth'], name="East", line=dict(color='blue')), row=1, col=1)
+                fig.add_trace(go.Scatter(x=processed['n_rel'], y=processed['depth'], name="North", line=dict(color='red')), row=1, col=2)
+                fig.update_yaxes(autorange="reversed", title="depth (ft)")
                 st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================
