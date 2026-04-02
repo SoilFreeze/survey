@@ -106,87 +106,96 @@ if category == "Database Maintenance":
                 st.rerun()
 
     # --- STEP 2: UPLOAD BASELINE (PREVENTS DOUBLES) ---
-    if action == "Upload Baseline":
-    st.subheader("Step 2: Upload Design Baseline")
-    file = st.file_uploader("Upload CSV", type=['csv'])
+# ==========================================
+# 4. DATABASE MAINTENANCE (CLEANED VERSION)
+# ==========================================
+if category == "Database Maintenance":
+    # 1. Action Selector
+    action = st.radio("Action", ["Project Setup", "Upload Baseline", "Update Top Survey", "Upload Downhole", "Manage Data"], horizontal=True)
     
-    if file and active_proj is not None:
-        df_base = pd.read_csv(file)
-        # Normalize headers
-        df_base.columns = [c.lower().strip() for c in df_base.columns]
-        
-        # 1. MAP ID COLUMN
-        rename_map = {
-            'pipe':'hole_id', 'id':'hole_id', 'name':'hole_id', 'hole':'hole_id'
-        }
-        df_base = df_base.rename(columns=rename_map)
-        
-        # 2. THE FIX: REMOVE NULLS & EMPTY ROWS
-        # This removes any rows where 'pipe' is blank
-        df_base = df_base.dropna(subset=['hole_id'])
-        # Also remove rows that are entirely empty
-        df_base = df_base[df_base['hole_id'].astype(str).str.strip() != ""]
+    # --- ACTION: PROJECT SETUP ---
+    if action == "Project Setup":
+        with st.form("new_proj"):
+            st.subheader("Configure New Project")
+            n_id = st.text_input("Project ID")
+            n_name = st.text_input("Project Name")
+            n_len = st.number_input("Standard Pipe Length (ft)", value=100.0)
+            n_on = st.number_input("Origin Northing", format="%.3f")
+            n_oe = st.number_input("Origin Easting", format="%.3f")
+            
+            if st.form_submit_button("Save Project"):
+                new_df = pd.DataFrame([{
+                    'project_id': n_id, 
+                    'name': n_name, 
+                    'default_length': n_len, 
+                    'origin_north': n_on, 
+                    'origin_east': n_oe
+                }])
+                upload_to_bq(new_df, "sensorpush-export.survey.projects")
+                st.success(f"Project '{n_name}' created.")
+                st.rerun()
 
-        # 3. FORCE COMPLETE SCHEMA
-        db_schema = {
-            'project_id': str(active_proj['project_id']),
-            'hole_id': None,
-            'design_n': 0.0,
-            'design_e': 0.0,
-            'design_z': 0.0,
-            'phase': "Phase1",
-            'pipe_type': "Freeze Pipe",
-            'design_inc': 0.0,
-            'design_az': 0.0,
-            'design_length': active_proj.get('default_length', 100.0)
-        }
-
-        for col, default in db_schema.items():
-            if col not in df_base.columns:
-                df_base[col] = default
+    # --- ACTION: UPLOAD BASELINE (The 1,105-Hole Grid) ---
+    elif action == "Upload Baseline":
+        st.subheader("Step 2: Upload Design Baseline")
+        file = st.file_uploader("Upload CSV", type=['csv'])
         
-        # 4. VALIDATION
-        if df_base.empty:
-            st.error("❌ The CSV appears to be empty or missing Pipe IDs.")
-        else:
-            st.success(f"✅ Found {len(df_base)} valid pipes (Filtered out nulls).")
-            st.dataframe(df_base[['hole_id', 'design_n', 'design_e']].head())
+        if file and active_proj is not None:
+            df_base = pd.read_csv(file)
+            df_base.columns = [c.lower().strip() for c in df_base.columns]
+            
+            # Map 'pipe' to 'hole_id' and other variations
+            rename_map = {
+                'pipe':'hole_id', 'id':'hole_id', 'name':'hole_id', 'hole':'hole_id',
+                'north':'design_n', 'northing':'design_n', 'east':'design_e', 'easting':'design_e',
+                'elev':'design_z', 'elevation':'design_z', 'type':'pipe_type', 'length':'design_length'
+            }
+            df_base = df_base.rename(columns=rename_map)
+            
+            # CLEANING: Drop any rows where the Pipe ID is missing
+            df_base = df_base.dropna(subset=['hole_id'])
+            df_base = df_base[df_base['hole_id'].astype(str).str.strip() != ""]
+
+            # SCHEMA: Ensure all 10 columns exist for BigQuery
+            db_schema = {
+                'project_id': str(active_proj['project_id']),
+                'hole_id': None,
+                'design_n': 0.0, 'design_e': 0.0, 'design_z': 0.0,
+                'phase': "Phase1", 'pipe_type': "Freeze Pipe",
+                'design_inc': 0.0, 'design_az': 0.0, 
+                'design_length': active_proj.get('default_length', 100.0)
+            }
+
+            for col, default in db_schema.items():
+                if col not in df_base.columns:
+                    df_base[col] = default
+
+            st.success(f"✅ Ready to upload {len(df_base)} pipes.")
+            st.dataframe(df_base[['hole_id', 'design_n', 'design_e', 'pipe_type']].head())
 
             if st.button("🚀 Confirm & Overwrite Phase"):
-                with st.spinner(f"Cleaning and uploading {len(df_base)} pipes..."):
+                with st.spinner(f"Updating {len(df_base)} records..."):
                     p_id = str(active_proj['project_id'])
-                    phase_name = df_base['phase'].iloc[0]
+                    ph = df_base['phase'].iloc[0]
+                    client.query(f"DELETE FROM `sensorpush-export.survey.holes` WHERE project_id='{p_id}' AND phase='{ph}'").result()
                     
-                    # Wipe only the matching project/phase records
-                    client.query(f"DELETE FROM `sensorpush-export.survey.holes` WHERE project_id = '{p_id}' AND phase = '{phase_name}'").result()
-                    
-                    # Ensure strict column order
                     final_df = df_base[list(db_schema.keys())]
-                    
-                    try:
-                        upload_to_bq(final_df, "sensorpush-export.survey.holes")
-                        st.success(f"Successfully uploaded {len(final_df)} pipes to the grid.")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Upload failed: {e}")
-    # --- STEP 3: UPDATE TOP SURVEY (AS-BUILT) ---
+                    upload_to_bq(final_df, "sensorpush-export.survey.holes")
+                    st.success("Baseline Updated.")
+                    st.rerun()
+
+    # --- ACTION: UPDATE TOP SURVEY (As-Built) ---
     elif action == "Update Top Survey":
         st.subheader("Step 3: Update Actual Collar (As-Built)")
         top_file = st.file_uploader("Upload As-Built CSV", type=['csv'])
-        
         if top_file and active_proj is not None:
-            file_date = get_file_date(top_file.name)
-            st.write(f"📅 Detected Date: **{file_date}**")
-            
             df_top = pd.read_csv(top_file)
             df_top.columns = [c.upper().strip() for c in df_top.columns]
             df_top = df_top.rename(columns={'ID': 'hole_id', 'NORTHING': 'actual_n', 'EASTING': 'actual_e', 'ELEVATION': 'actual_z'})
             
-            if st.button("Match & Update 0,0 Grid"):
+            if st.button("Apply As-Built Coordinates"):
                 temp_id = f"sensorpush-export.survey.temp_top_{active_proj['project_id']}"
                 upload_to_bq(df_top, temp_id, write_mode="WRITE_TRUNCATE")
-                
-                # MERGE to keep Design columns untouched
                 merge_q = f"""
                     MERGE `sensorpush-export.survey.holes` T USING `{temp_id}` S 
                     ON T.hole_id = S.hole_id AND T.project_id = '{active_proj['project_id']}' 
@@ -194,8 +203,42 @@ if category == "Database Maintenance":
                 """
                 client.query(merge_q).result()
                 client.delete_table(temp_id)
-                st.success("Top Surveys Synced.")
+                st.success("Surface Surveys Synced.")
 
+    # --- ACTION: UPLOAD DOWNHOLE (Probe Data) ---
+    elif action == "Upload Downhole":
+        st.subheader("Step 4: Upload Probe Data")
+        dh_file = st.file_uploader("Upload Downhole CSV", type=['csv'])
+        if dh_file and active_proj is not None:
+            # Extract date from filename
+            match = re.search(r'(\d{4})[.\-](\d{2})[.\-](\d{2})', dh_file.name)
+            f_date = match.group(0).replace('.', '-') if match else datetime.now().strftime('%Y-%m-%d')
+            
+            df_dh = pd.read_csv(dh_file)
+            df_dh.columns = [c.lower().strip() for c in df_dh.columns]
+            df_dh = df_dh.rename(columns={'pipe':'hole_id', 'id':'hole_id'})
+            
+            if st.button("Upload to Survey Table"):
+                df_dh['project_id'] = str(active_proj['project_id'])
+                df_dh['survey_date'] = f_date
+                # Only keep columns the DB expects
+                cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
+                upload_to_bq(df_dh[[c for c in cols if c in df_dh.columns]], "sensorpush-export.survey.surveys")
+                st.success(f"Uploaded {len(df_dh)} points for {f_date}")
+
+    # --- ACTION: MANAGE DATA (Danger Zone) ---
+    elif action == "Manage Data":
+        st.subheader("🗑️ Data Cleanup")
+        with st.expander("⚠️ DANGER ZONE: Delete Project"):
+            confirm = st.text_input(f"Type '{active_proj['name']}' to confirm")
+            if st.button("DELETE PERMANENTLY"):
+                if confirm == active_proj['name']:
+                    p_id = active_proj['project_id']
+                    client.query(f"DELETE FROM `sensorpush-export.survey.surveys` WHERE project_id='{p_id}'").result()
+                    client.query(f"DELETE FROM `sensorpush-export.survey.holes` WHERE project_id='{p_id}'").result()
+                    client.query(f"DELETE FROM `sensorpush-export.survey.projects` WHERE project_id='{p_id}'").result()
+                    st.rerun()
+                        
     # --- STEP 4: UPLOAD DOWNHOLE (HARDENED) ---
     elif action == "Upload Downhole":
         st.subheader("Step 4: Upload Downhole Survey")
