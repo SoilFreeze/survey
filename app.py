@@ -22,6 +22,20 @@ def get_bq_client():
 
 client = get_bq_client()
 
+# Move this to the top of the file!
+def get_smart_date(name):
+    """Extracts date from filename in various formats."""
+    pattern = r'(\d{1,4})[.\-](\d{1,2})[.\-](\d{2,4})'
+    m = re.search(pattern, name)
+    if m:
+        g = m.groups()
+        if len(g[0]) == 4: # YYYY.MM.DD
+            return f"{g[0]}-{g[1].zfill(2)}-{g[2].zfill(2)}"
+        else: # MM.DD.YY or MM.DD.YYYY
+            yr = "20" + g[2] if len(g[2]) == 2 else g[2]
+            return f"{yr}-{g[0].zfill(2)}-{g[1].zfill(2)}"
+    return datetime.now().strftime('%Y-%m-%d')
+    
 def run_query(query):
     return client.query(query).to_dataframe()
 
@@ -161,26 +175,25 @@ if category == "Database Maintenance":
                 client.delete_table(temp_id)
                 st.success("Surface As-Builts updated.")
 
-    # --- STEP 4: UPLOAD DOWNHOLE (THE CRITICAL FIX) ---
-    if action == "Upload Downhole":
+    # --- STEP 4: UPLOAD DOWNHOLE ---
+    elif action == "Upload Downhole":
         st.subheader("Step 4: Upload Probe Data")
         dh_file = st.file_uploader("Upload Downhole CSV", type=['csv'])
         
         if dh_file and active_proj is not None:
+            # This will now work because get_smart_date is at the top of the file
             f_date = get_smart_date(dh_file.name)
             st.info(f"📅 Detected Survey Date: **{f_date}**")
             
-            # Load with BOM handling
             df_dh = pd.read_csv(dh_file, encoding='utf-8-sig')
             
-            # 1. Build Mapping (Case insensitive, space stripping)
             mapping = {}
             for col in df_dh.columns:
                 c_low = col.lower().strip()
                 if any(kw in c_low for kw in ['hole', 'pipe']):
                     mapping[col] = 'hole_id'
-                elif any(kw in c_low for kw in ['length', 'md']):
-                    mapping[col] = 'length' # Standardized target
+                elif any(kw in c_low for kw in ['length', 'depth', 'md']):
+                    mapping[col] = 'length'  # Renamed for your new standard
                 elif 'azi' in c_low:
                     mapping[col] = 'azimuth'
                 elif 'inc' in c_low:
@@ -188,7 +201,7 @@ if category == "Database Maintenance":
 
             df_dh = df_dh.rename(columns=mapping)
 
-            # 2. Strict Validation (Only looking for length now)
+            # GATEKEEPER: Looking for 'length'
             req_cols = ['hole_id', 'length', 'azimuth', 'inclination']
             missing = [c for c in req_cols if c not in df_dh.columns]
             
@@ -196,25 +209,19 @@ if category == "Database Maintenance":
                 df_dh['project_id'] = str(active_proj['project_id'])
                 df_dh['survey_date'] = f_date
                 
-                # Cleanup Numeric Types
                 df_dh['length'] = pd.to_numeric(df_dh['length'], errors='coerce')
-                df_dh['azimuth'] = pd.to_numeric(df_dh['azimuth'], errors='coerce').fillna(0.0)
-                df_dh['inclination'] = pd.to_numeric(df_dh['inclination'], errors='coerce').fillna(0.0)
-                
-                # Drop junk/footer rows
                 df_dh = df_dh.dropna(subset=['length', 'hole_id'])
 
                 st.write("### ✅ Mapping Success")
                 st.dataframe(df_dh[req_cols].head())
 
                 if st.button("🚀 Upload to BigQuery"):
-                    with st.spinner("Uploading data..."):
+                    with st.spinner("Uploading..."):
                         final_cols = ['project_id', 'hole_id', 'length', 'azimuth', 'inclination', 'survey_date']
                         upload_to_bq(df_dh[final_cols], "sensorpush-export.survey.surveys")
-                        st.success(f"Successfully uploaded {len(df_dh)} points.")
+                        st.success(f"Uploaded {len(df_dh)} points.")
             else:
                 st.error(f"CSV is missing columns: {', '.join(missing)}")
-                st.write("Detected Headers:", list(df_dh.columns))
 
     # (Other Database Maintenance sections like Project Setup remain as they were)
     elif action == "Project Setup":
