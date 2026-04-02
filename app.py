@@ -97,56 +97,48 @@ elif action == "Upload Downhole":
         dh_file = st.file_uploader("Upload Downhole CSV", type=['csv'])
         
         if dh_file and active_proj is not None:
-            # --- 1. NEW ROBUST DATE PARSER ---
-            def get_filename_date(name):
-                # Target M-D-Y (e.g., 2-18-26)
-                match = re.search(r'(\d{1,2})[.\-](\d{1,2})[.\-](\d{2,4})', name)
-                if match:
-                    m, d, y = match.groups()
-                    full_yr = f"20{y}" if len(y) == 2 else y
-                    return f"{full_yr}-{m.zfill(2)}-{d.zfill(2)}"
-                return datetime.now().strftime('%Y-%m-%d')
-
-            f_date = get_filename_date(dh_file.name)
+            # 1. DATE DETECTION (Confirmed working)
+            f_date = get_file_date(dh_file.name)
             st.info(f"📅 Detected Survey Date: **{f_date}**")
             
-            # --- 2. LOAD & POSITIONAL MAPPING ---
-            df_dh = pd.read_csv(dh_file)
-            
-            # Show headers in the console for debugging
-            # st.write("Original Headers:", list(df_dh.columns))
-
-            # Forcefully map by column index if the names are being stubborn
-            # Based on your previous output: Index 3=hole_id, 6=azimuth, 7=inclination, 8=length
+            # 2. FORCE COLUMN NAMES (The Fix)
+            # We load the CSV and tell it exactly which columns are which by position.
+            # Based on your file: 3=hole_id, 6=azimuth, 7=inclination, 8=depth
             try:
-                processed_df = pd.DataFrame({
-                    'hole_id': df_dh.iloc[:, 3].astype(str),
-                    'depth': pd.to_numeric(df_dh.iloc[:, 8], errors='coerce'),
-                    'azimuth': pd.to_numeric(df_dh.iloc[:, 6], errors='coerce'),
-                    'inclination': pd.to_numeric(df_dh.iloc[:, 7], errors='coerce')
-                })
+                # Load the full CSV first
+                raw_df = pd.read_csv(dh_file)
+                
+                # Create a clean dataframe by grabbing columns by their INDEX (0, 1, 2...)
+                # This doesn't care if the header says "length", "depth", or "banana"
+                df_dh = pd.DataFrame()
+                df_dh['hole_id'] = raw_df.iloc[:, 3].astype(str).str.strip()
+                df_dh['azimuth'] = pd.to_numeric(raw_df.iloc[:, 6], errors='coerce').fillna(0.0)
+                df_dh['inclination'] = pd.to_numeric(raw_df.iloc[:, 7], errors='coerce').fillna(0.0)
+                df_dh['depth'] = pd.to_numeric(raw_df.iloc[:, 8], errors='coerce').fillna(0.0)
+                
+                # Add metadata
+                df_dh['project_id'] = str(active_proj['project_id'])
+                df_dh['survey_date'] = f_date
+                
             except Exception as e:
-                st.error(f"Positional mapping failed: {e}")
+                st.error(f"Positional Error: Could not find columns. {e}")
                 st.stop()
 
-            # --- 3. CLEANUP & PREVIEW ---
-            processed_df['project_id'] = str(active_proj['project_id'])
-            processed_df['survey_date'] = f_date
-            processed_df = processed_df.dropna(subset=['depth']) # Remove empty rows
+            # 3. PREVIEW
+            st.write("### Data Preview (Forced Column Mapping)")
+            # This table SHOULD now show your 'length' data under the 'depth' column
+            st.dataframe(df_dh[['hole_id', 'depth', 'azimuth', 'inclination']].head())
 
-            st.write("### Data Preview (Positional Mapping Success)")
-            st.dataframe(processed_df.head())
-
-            # --- 4. UPLOAD ---
+            # 4. UPLOAD
             if st.button("🚀 Upload to BigQuery"):
-                with st.spinner("Uploading..."):
+                with st.spinner("Pushing to BigQuery..."):
                     try:
-                        # Table Schema matches 'depth'
+                        # Match BigQuery Table Schema exactly
                         final_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
-                        upload_to_bq(processed_df[final_cols], "sensorpush-export.survey.surveys")
-                        st.success(f"Uploaded {len(processed_df)} points for {f_date}")
+                        upload_to_bq(df_dh[final_cols], "sensorpush-export.survey.surveys")
+                        st.success(f"Success! {len(df_dh)} points uploaded.")
                     except Exception as e:
-                        st.error(f"BigQuery Error: {e}")
+                        st.error(f"BigQuery Reject: {e}")
 
 # ==========================================
 # 2. MATH ENGINE (Standardized to 'length')
