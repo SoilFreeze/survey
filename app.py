@@ -147,8 +147,6 @@ elif choice == "2. Upload Baseline":
     if active_proj is not None:
         st.subheader(f"Step 2: Import Design Baseline for {active_proj['name']}")
         
-        # 1. Define Robust Mapping Aliases
-        # This list covers your common variations like 'Ele', 'ID', 'North', etc.
         column_aliases = {
             'hole_id': ['hole_id', 'id', 'name', 'hole', 'point', 'station'],
             'design_n': ['design_n', 'north', 'northing', 'y', 'n'],
@@ -156,45 +154,42 @@ elif choice == "2. Upload Baseline":
             'design_z': ['design_z', 'ele', 'elevation', 'z', 'rl', 'level']
         }
 
-        baseline_file = st.file_uploader("Upload Baseline CSV (Robust Header Support)", type=['csv'])
+        baseline_file = st.file_uploader("Upload Baseline CSV", type=['csv'])
         
         if baseline_file:
             df_base = pd.read_csv(baseline_file)
-            raw_cols = [c.lower().strip() for c in df_base.columns]
+            
+            # 1. Map columns
             rename_map = {}
-
-            # 2. Automated Mapping Logic
             for official_name, aliases in column_aliases.items():
                 for col in df_base.columns:
                     if col.lower().strip() in aliases:
                         rename_map[col] = official_name
-                        break # Found the best match for this official column
+                        break
 
-            # 3. Apply Renaming
             df_base = df_base.rename(columns=rename_map)
             
-            # Check if we have the minimum required data after renaming
             required = ['hole_id', 'design_n', 'design_e']
             missing = [col for col in required if col not in df_base.columns]
 
             if not missing:
-                # Add default Z if missing, and add project link
+                # --- THE FIX STARTS HERE ---
+                # Force ID columns to be strings to avoid ArrowTypeError
+                df_base['hole_id'] = df_base['hole_id'].astype(str)
+                df_base['project_id'] = str(active_proj['project_id']) 
+                # ---------------------------
+
                 if 'design_z' not in df_base.columns:
                     df_base['design_z'] = 0.0
                 
-                df_base['project_id'] = active_proj['project_id']
-                
-                # Filter to only the columns our database expects
                 final_cols = ['project_id', 'hole_id', 'design_n', 'design_e', 'design_z']
                 df_to_upload = df_base[final_cols].copy()
 
-                st.write("✅ Headers mapped successfully!")
+                st.write("✅ Data prepared for upload:")
                 st.dataframe(df_to_upload.head())
                 
                 if st.button("Confirm & Upload to BigQuery"):
                     upload_to_bq(df_to_upload, "sensorpush-export.survey.holes")
                     st.success(f"Uploaded {len(df_to_upload)} holes.")
             else:
-                st.error(f"Could not find columns for: {missing}. Found: {list(df_base.columns)}")
-    else:
-        st.warning("Please select a project in the sidebar first.")
+                st.error(f"Missing columns: {missing}")
