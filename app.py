@@ -99,23 +99,49 @@ if choice == "Project Dashboard":
         st.error("Select or create a project first.")
 
 elif choice == "1. Create New Project":
-    st.subheader("Setup New Project")
-    with st.form("new_project_form", clear_on_submit=True):
-        new_id = st.text_input("Project ID (Unique Code)")
-        new_name = st.text_input("Project Name (Display Name)")
-        new_on = st.number_input("Origin Northing", format="%.3f")
-        new_oe = st.number_input("Origin Easting", format="%.3f")
-        
-        if st.form_submit_button("Save to Database"):
-            new_data = pd.DataFrame([{
-                'project_id': new_id,
-                'name': new_name,
-                'origin_north': new_on,
-                'origin_east': new_oe
-            }])
-            upload_to_bq(new_data, "sensorpush-export.survey.projects")
-            st.success("Project Saved! Refreshing...")
-            st.rerun() # Refresh the sidebar menu
+    tab1, tab2 = st.tabs(["Create New", "Edit Existing"])
+
+    # --- SUB-BLOCK: CREATE ---
+    with tab1:
+        st.subheader("Setup New Project")
+        with st.form("new_project_form", clear_on_submit=True):
+            new_id = st.text_input("Project ID (Unique Code)")
+            new_name = st.text_input("Project Name (Display Name)")
+            new_on = st.number_input("Origin Northing (can be 0 for now)", format="%.3f", value=0.0)
+            new_oe = st.number_input("Origin Easting (can be 0 for now)", format="%.3f", value=0.0)
+            
+            if st.form_submit_button("Save New Project"):
+                new_df = pd.DataFrame([{
+                    'project_id': new_id, 'name': new_name,
+                    'origin_north': new_on, 'origin_east': new_oe
+                }])
+                upload_to_bq(new_df, "sensorpush-export.survey.projects")
+                st.success("Project Created!")
+                st.rerun()
+
+    # --- SUB-BLOCK: EDIT ---
+    with tab2:
+        if active_proj is not None:
+            st.subheader(f"Edit Details for: {active_proj['name']}")
+            # Text inputs pre-filled with current BigQuery values
+            upd_name = st.text_input("Edit Name", value=active_proj['name'])
+            upd_on = st.number_input("Update Origin Northing", value=float(active_proj['origin_north']), format="%.3f")
+            upd_oe = st.number_input("Update Origin Easting", value=float(active_proj['origin_east']), format="%.3f")
+            
+            if st.button("Update Project in Database"):
+                # BigQuery UPDATE script
+                update_query = f"""
+                    UPDATE `sensorpush-export.survey.projects`
+                    SET name = '{upd_name}', 
+                        origin_north = {upd_on}, 
+                        origin_east = {upd_oe}
+                    WHERE project_id = '{active_proj['project_id']}'
+                """
+                client.query(update_query).result()
+                st.success("Project coordinates updated!")
+                st.rerun()
+        else:
+            st.warning("Select a project from the sidebar to edit it.")
 
 elif choice == "2. Upload Baseline":
     if active_proj is not None:
