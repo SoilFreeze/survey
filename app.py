@@ -31,10 +31,10 @@ def upload_to_bq(df, table_id, write_mode="WRITE_APPEND"):
     return job.result()
 
 # ==========================================
-# 2. MATH ENGINE (Battered Support)
+# 2. MATH ENGINE (Using 'length')
 # ==========================================
 def calculate_survey_path(df, start_n, start_e):
-    # Uses 'length' for sorting and distance calculation
+    # Standardizing to use the 'length' column for all math
     df = df.sort_values('length')
     rad_az = np.radians(df['azimuth'])
     rad_inc = np.radians(df['inclination'])
@@ -48,9 +48,8 @@ def calculate_survey_path(df, start_n, start_e):
     return df
 
 # ==========================================
-# 3. GLOBAL SIDEBAR
+# 3. GLOBAL SIDEBAR & NAVIGATION
 # ==========================================
-
 st.sidebar.title("🏗️ SoilFreeze Hub")
 df_projects = run_query("SELECT * FROM `sensorpush-export.survey.projects` ORDER BY name")
 
@@ -69,7 +68,7 @@ else:
     st.sidebar.warning("No projects found.")
     active_proj = None
 
-category = st.sidebar.selectbox("Category", ["Database Maintenance", "Visualization", "Reports"])
+category = st.sidebar.selectbox("Category", ["Database Maintenance", "Visualization"])
 
 # ==========================================
 # 4. DATABASE MAINTENANCE
@@ -125,13 +124,15 @@ if category == "Database Maintenance":
 
     
     # --- UPLOAD DOWNHOLE (THE FIX IS HERE) ---
-    # --- STEP 4: UPLOAD DOWNHOLE (PROBE DATA) ---
-    elif action == "Upload Downhole":
+if category == "Database Maintenance":
+    action = st.radio("Action", ["Upload Downhole", "Project Setup", "Upload Baseline"], horizontal=True)
+
+    if action == "Upload Downhole":
         st.subheader("Step 4: Upload Probe Data")
         dh_file = st.file_uploader("Upload Downhole CSV", type=['csv'])
         
         if dh_file and active_proj is not None:
-            # 1. FIXED DATE PARSING (Handles 2-13-26 as Feb 13, 2026)
+            # 1. FIX DATE PARSER: Specifically handles M-D-Y format like 2-13-26
             def get_smart_date(name):
                 pattern = r'(\d{1,2})[.\-](\d{1,2})[.\-](\d{2,4})'
                 m = re.search(pattern, name)
@@ -142,11 +143,11 @@ if category == "Database Maintenance":
                 return datetime.now().strftime('%Y-%m-%d')
 
             f_date = get_smart_date(dh_file.name)
-            st.info(f"📅 Detected Survey Date: **{f_date}**")
+            st.info(f"📅 Survey Date: **{f_date}**")
             
             df_dh = pd.read_csv(dh_file)
             
-            # 2. THE HARVESTER: Maps your CSV headers to the script variables
+            # 2. THE TRANSLATOR: Maps any CSV header to 'length' internally
             rename_map = {}
             for col in df_dh.columns:
                 c_low = col.lower().strip()
@@ -157,35 +158,32 @@ if category == "Database Maintenance":
 
             df_dh = df_dh.rename(columns=rename_map)
             
-            # 3. VALIDATION
-            req_cols = ['hole_id', 'length', 'azimuth', 'inclination']
-            if all(c in df_dh.columns for c in req_cols):
+            # 3. VERIFY REQUIRED COLUMNS
+            req = ['hole_id', 'length', 'azimuth', 'inclination']
+            if all(c in df_dh.columns for c in req):
                 df_dh['project_id'] = str(active_proj['project_id'])
                 df_dh['survey_date'] = f_date
                 
-                # Ensure numbers are clean
+                # Cleanup numbers
                 for c in ['length', 'azimuth', 'inclination']:
                     df_dh[c] = pd.to_numeric(df_dh[c], errors='coerce').fillna(0.0)
 
-                st.write("### Data Preview")
-                st.dataframe(df_dh[req_cols].head())
+                st.write("### Data Preview (Ready for Upload)")
+                st.dataframe(df_dh[req].head())
 
                 if st.button("🚀 Upload to BigQuery"):
-                    with st.spinner("Uploading..."):
+                    with st.spinner("Translating Length to Depth for Database..."):
                         try:
-                            # IMPORTANT: Your BQ table uses 'depth', so we rename 'length' back for the upload
+                            # CRITICAL STEP: Rename 'length' back to 'depth' so BigQuery accepts it
                             upload_df = df_dh.copy().rename(columns={'length': 'depth'})
-                            final_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
                             
+                            final_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
                             upload_to_bq(upload_df[final_cols], "sensorpush-export.survey.surveys")
-                            st.success(f"Successfully uploaded {len(df_dh)} points for {f_date}")
+                            st.success(f"Successfully uploaded {len(df_dh)} points!")
                         except Exception as e:
-                            st.error(f"BigQuery Error: {e}")
+                            st.error(f"Database Error: {e}")
             else:
-                missing = set(req_cols) - set(df_dh.columns)
-                st.error(f"Mapping failed. Missing: {missing}")
-                st.write("Headers found in file:", list(df_dh.columns))
-
+                st.error(f"Could not find required data. Missing: {set(req) - set(df_dh.columns)}")
 # ==========================================
 # 5. VISUALIZATION
 # ==========================================
