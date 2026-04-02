@@ -36,12 +36,12 @@ def get_file_date(filename):
 # 2. MATH ENGINE (Battered Support)
 # ==========================================
 def calculate_survey_path(df, start_n, start_e):
-    df = df.sort_values('length') # Changed from depth
+    df = df.sort_values('length') 
     rad_az = np.radians(df['azimuth'])
     rad_inc = np.radians(df['inclination'])
     
     # Calculate distance based on 'length'
-    dist = df['length'].diff().fillna(0) # Changed from depth
+    dist = df['length'].diff().fillna(0) 
     
     dn = dist * np.sin(rad_inc) * np.cos(rad_az)
     de = dist * np.sin(rad_inc) * np.sin(rad_az)
@@ -175,7 +175,7 @@ if category == "Database Maintenance":
                 c_low = col.lower().strip()
                 if any(kw in c_low for kw in ['hole', 'pipe']):
                     mapping[col] = 'hole_id'
-                elif any(kw in c_low for kw in ['length', 'depth', 'md']):
+                elif any(kw in c_low for kw in ['length', 'md']):
                     mapping[col] = 'length' # Standardized target
                 elif 'azi' in c_low:
                     mapping[col] = 'azimuth'
