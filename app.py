@@ -29,6 +29,22 @@ def upload_to_bq(df, table_id, write_mode="WRITE_APPEND"):
     job_config = bigquery.LoadJobConfig(write_disposition=write_mode)
     job = client.load_table_from_dataframe(df, table_id, job_config=job_config)
     return job.result()
+##### Function Junction #####
+
+def get_smart_date(name):
+    # This regex specifically looks for 1-2 digit month, 1-2 digit day, and 2 or 4 digit year
+    # Example: '2-13-26' or '02.13.2026'
+    pattern = r'(\d{1,2})[.\-](\d{1,2})[.\-](\d{2,4})'
+    m = re.search(pattern, name)
+    if m:
+        month, day, year = m.groups()
+        # If year is '26', convert it to '2026'
+        full_year = "20" + year if len(year) == 2 else year
+        # Returns YYYY-MM-DD for BigQuery compatibility
+        return f"{full_year}-{month.zfill(2)}-{day.zfill(2)}"
+    
+    # Fallback to current date if no pattern is found
+    return datetime.now().strftime('%Y-%m-%d')
 
 # ==========================================
 # 2. MATH ENGINE (Standardized to 'length')
@@ -141,46 +157,55 @@ if category == "Database Maintenance":
     elif action == "Upload Downhole":
         st.subheader("Step 4: Upload Probe Data")
         dh_file = st.file_uploader("Upload Downhole CSV", type=['csv'])
+        
         if dh_file and active_proj is not None:
-            # Smart Date Parsing for 2-13-26
-            def get_smart_date(name):
-                pattern = r'(\d{1,2})[.\-](\d{1,2})[.\-](\d{2,4})'
-                m = re.search(pattern, name)
-                if m:
-                    month, day, year = m.groups()
-                    full_yr = "20" + year if len(year) == 2 else year
-                    return f"{full_yr}-{month.zfill(2)}-{day.zfill(2)}"
-                return datetime.now().strftime('%Y-%m-%d')
-
+            # Use the updated date function from above
             f_date = get_smart_date(dh_file.name)
-            st.info(f"📅 Survey Date: **{f_date}**")
+            st.info(f"📅 Detected Survey Date: **{f_date}**")
+            
             df_dh = pd.read_csv(dh_file)
             
-            # Harvester: Change "length" to internal "length"
-            rename_map = {}
+            # Map headers: find 'length' OR 'depth' and call it 'length' internally
+            col_map = {}
             for col in df_dh.columns:
                 c_low = col.lower().strip()
-                if any(k in c_low for k in ['hole', 'pipe', 'id']): rename_map[col] = 'hole_id'
-                elif any(k in c_low for k in ['length', 'depth', 'dist']): rename_map[col] = 'length'
-                elif 'azi' in c_low: rename_map[col] = 'azimuth'
-                elif 'inc' in c_low: rename_map[col] = 'inclination'
-            df_dh = df_dh.rename(columns=rename_map)
-
-            req = ['hole_id', 'length', 'azimuth', 'inclination']
-            if all(c in df_dh.columns for c in req):
+                if any(k in c_low for k in ['hole', 'pipe', 'id']): col_map[col] = 'hole_id'
+                elif any(k in c_low for k in ['length', 'depth']): col_map[col] = 'length'
+                elif 'azi' in c_low: col_map[col] = 'azimuth'
+                elif 'inc' in c_low: col_map[col] = 'inclination'
+            
+            df_dh = df_dh.rename(columns=col_map)
+            
+            # Validation now looks for 'length' (Index 8 in your file)
+            req_cols = ['hole_id', 'length', 'azimuth', 'inclination']
+            missing = [c for c in req_cols if c not in df_dh.columns]
+            
+            if not missing:
                 df_dh['project_id'] = str(active_proj['project_id'])
                 df_dh['survey_date'] = f_date
+                
+                # Ensure data is numeric
                 for c in ['length', 'azimuth', 'inclination']:
                     df_dh[c] = pd.to_numeric(df_dh[c], errors='coerce').fillna(0.0)
 
+                st.write("### Data Preview")
+                st.dataframe(df_dh[req_cols].head())
+
                 if st.button("🚀 Upload to BigQuery"):
-                    # Map 'length' back to 'depth' for the BQ Table
-                    upload_df = df_dh.copy().rename(columns={'length': 'depth'})
-                    final_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
-                    upload_to_bq(upload_df[final_cols], "sensorpush-export.survey.surveys")
-                    st.success("Uploaded.")
+                    with st.spinner("Processing..."):
+                        try:
+                            # IMPORTANT: Rename 'length' to 'depth' for the BigQuery Schema
+                            upload_df = df_dh.copy().rename(columns={'length': 'depth'})
+                            
+                            # Match the BigQuery table columns exactly
+                            final_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
+                            upload_to_bq(upload_df[final_cols], "sensorpush-export.survey.surveys")
+                            st.success(f"Successfully uploaded {len(df_dh)} points for {f_date}")
+                        except Exception as e:
+                            st.error(f"BigQuery Error: {e}")
             else:
-                st.error(f"Missing: {set(req)-set(df_dh.columns)}")
+                st.error(f"Mapping failed. Could not find: {missing}")
+                st.write("Headers found in CSV:", list(df_dh.columns))
 
     elif action == "Manage Data":
         st.subheader("5. Data Cleanup")
@@ -254,10 +279,23 @@ elif category == "Visualization":
 # 6. REPORTS
 # ==========================================
 elif category == "Reports":
-    stats_query = f"""SELECT COUNT(*) as total_baseline, COUNTIF(actual_n != 0 AND actual_n IS NOT NULL) as top_surveys_done,
-                    (SELECT COUNT(DISTINCT hole_id) FROM `sensorpush-export.survey.surveys` WHERE project_id = '{active_proj['project_id']}') as downhole_completed
-                    FROM `sensorpush-export.survey.holes` WHERE project_id = '{active_proj['project_id']}'"""
-    df_stats = run_query(stats_query)
-    st.metric("Baseline (Grid)", df_stats['total_baseline'][0])
-    st.metric("Top Surveys (As-Built)", df_stats['top_surveys_done'][0])
-    st.metric("Downhole Surveys", df_stats['downhole_completed'][0])
+    st.subheader("Project Status Report")
+    if active_proj is not None:
+        # Combined query to get all stats at once
+        stats_query = f"""
+            SELECT 
+                (SELECT COUNT(*) FROM `sensorpush-export.survey.holes` WHERE project_id = '{active_proj['project_id']}') as total_holes,
+                (SELECT COUNTIF(actual_n != 0 AND actual_n IS NOT NULL) FROM `sensorpush-export.survey.holes` WHERE project_id = '{active_proj['project_id']}') as as_built_complete,
+                (SELECT COUNT(DISTINCT hole_id) FROM `sensorpush-export.survey.surveys` WHERE project_id = '{active_proj['project_id']}') as probe_complete
+        """
+        df_stats = run_query(stats_query)
+        
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Grid Holes", df_stats['total_holes'][0])
+        col2.metric("Surface As-Builts", df_stats['as_built_complete'][0])
+        col3.metric("Downhole Surveys", df_stats['probe_complete'][0])
+        
+        # Simple progress bar
+        progress = df_stats['probe_complete'][0] / df_stats['total_holes'][0] if df_stats['total_holes'][0] > 0 else 0
+        st.write(f"**Overall Survey Progress: {progress*100:.1f}%**")
+        st.progress(progress)
