@@ -167,95 +167,76 @@ if category == "Database Maintenance":
         dh_file = st.file_uploader("Upload Downhole CSV", type=['csv'])
         
         if dh_file and active_proj is not None:
-            # 1. ROBUST DATE EXTRACTION
+            # 1. DATE EXTRACTION
             def get_smart_date(name):
                 pattern = r'(\d{1,4})[.\-](\d{1,2})[.\-](\d{2,4})'
                 m = re.search(pattern, name)
                 if m:
                     g = m.groups()
-                    if len(g[0]) == 4: 
-                        return f"{g[0]}-{g[1].zfill(2)}-{g[2].zfill(2)}"
-                    else: 
-                        yr = "20" + g[2] if len(g[2]) == 2 else g[2]
-                        return f"{yr}-{g[0].zfill(2)}-{g[1].zfill(2)}"
+                    yr = ("20" + g[2] if len(g[2]) == 2 else g[2]) if len(g[0]) != 4 else g[0]
+                    mo = g[1].zfill(2) if len(g[0]) == 4 else g[0].zfill(2)
+                    da = g[2].zfill(2) if len(g[0]) == 4 else g[1].zfill(2)
+                    return f"{yr}-{mo}-{da}"
                 return datetime.now().strftime('%Y-%m-%d')
 
             f_date = get_smart_date(dh_file.name)
             st.info(f"📅 Detected Survey Date: **{f_date}**")
             
-            # 2. LOAD DATA (utf-8-sig handles hidden BOM markers)
-            try:
-                df_dh = pd.read_csv(dh_file, encoding='utf-8-sig')
-            except Exception as e:
-                st.error(f"Error reading CSV: {e}")
-                st.stop()
+            # 2. LOAD DATA (utf-8-sig handles hidden Excel characters)
+            df_dh = pd.read_csv(dh_file, encoding='utf-8-sig')
             
-            # 3. ADVANCED MAPPING LOGIC
-            # This strips all spaces/special chars to find a match
-            def normalize(text):
-                return re.sub(r'[^a-zA-Z0-9]', '', str(text)).lower().strip()
-
-            col_map = {}
-            for original_col in df_dh.columns:
-                norm = normalize(original_col)
+            # 3. CONSOLIDATED MAPPING (The Fix)
+            # This creates a 'translation' guide for the columns
+            mapping = {}
+            for col in df_dh.columns:
+                c_low = col.lower().strip()
                 
-                # Priority 1: Depth/Length
-                if norm in ['depth', 'length', 'md', 'measureddepth', 'len']:
-                    col_map[original_col] = 'depth'
-                # Priority 2: Hole ID
-                elif norm in ['hole', 'pipe', 'holeid', 'id']:
-                    col_map[original_col] = 'hole_id'
-                # Priority 3: Azimuth
-                elif 'azimuth' in norm or 'azi' in norm:
-                    col_map[original_col] = 'azimuth'
-                # Priority 4: Inclination
-                elif 'inclination' in norm or 'inc' in norm:
-                    col_map[original_col] = 'inclination'
+                # If it looks like Hole/Pipe -> hole_id
+                if any(x in c_low for x in ['hole', 'pipe', 'id']):
+                    mapping[col] = 'hole_id'
+                # If it looks like Length/Depth -> depth
+                elif any(x in c_low for x in ['length', 'depth', 'md']):
+                    mapping[col] = 'depth'
+                # If it looks like Azimuth -> azimuth
+                elif 'azi' in c_low:
+                    mapping[col] = 'azimuth'
+                # If it looks like Inclination -> inclination
+                elif 'inc' in c_low:
+                    mapping[col] = 'inclination'
 
-            df_dh = df_dh.rename(columns=col_map)
+            # Apply all renames at once
+            df_dh = df_dh.rename(columns=mapping)
 
             # 4. VALIDATION
             req_cols = ['hole_id', 'depth', 'azimuth', 'inclination']
             missing = [c for c in req_cols if c not in df_dh.columns]
             
             if not missing:
-                # Success Path
                 df_dh['project_id'] = str(active_proj['project_id'])
                 df_dh['survey_date'] = f_date
                 
-                # Data cleaning
+                # Cleanup data types
                 df_dh['hole_id'] = df_dh['hole_id'].astype(str).str.strip()
                 df_dh['depth'] = pd.to_numeric(df_dh['depth'], errors='coerce')
                 df_dh['azimuth'] = pd.to_numeric(df_dh['azimuth'], errors='coerce').fillna(0.0)
                 df_dh['inclination'] = pd.to_numeric(df_dh['inclination'], errors='coerce').fillna(0.0)
+                
+                # Remove rows where depth couldn't be converted to a number
+                df_dh = df_dh.dropna(subset=['depth'])
 
-                # Drop empty or footer rows
-                df_dh = df_dh.dropna(subset=['depth', 'hole_id'])
-
-                st.write("### ✅ Mapping Successful")
-                st.dataframe(df_dh[['hole_id', 'depth', 'azimuth', 'inclination']].head())
+                st.write("### Data Preview")
+                st.dataframe(df_dh[req_cols].head())
 
                 if st.button("🚀 Upload to BigQuery"):
                     with st.spinner("Uploading..."):
-                        final_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
-                        upload_to_bq(df_dh[final_cols], "sensorpush-export.survey.surveys")
-                        st.success(f"Uploaded {len(df_dh)} rows.")
+                        upload_to_bq(df_dh[req_cols + ['project_id', 'survey_date']], "sensorpush-export.survey.surveys")
+                        st.success(f"Success! Uploaded {len(df_dh)} points.")
             else:
-                # 5. DIAGNOSTIC VIEW (If it fails, this will tell us why)
-                st.error(f"Mapping failed. Missing: {', '.join(missing)}")
+                # This helps you see why it failed
+                st.error(f"CSV is missing columns: {', '.join(missing)}")
+                st.write("Current Columns in App Memory:", list(df_dh.columns))
+                st.write("Mapping Dictionary used:", mapping)
                 
-                # Show exactly what the computer is "seeing"
-                debug_data = []
-                for c in df_dh.columns:
-                    debug_data.append({
-                        "CSV Header Found": c,
-                        "Cleaned Version": normalize(c),
-                        "Mapped To": col_map.get(c, "Nothing")
-                    })
-                st.write("### 🔍 Mapping Debugger")
-                st.write("The app is trying to find 'depth' but failed. Look at the table below to see if 'Length' was cleaned correctly:")
-                st.table(debug_data)
-
     # --- STEP 5: MANAGE DATA ---
     elif action == "Manage Data":
         st.subheader("5. Data Cleanup")
