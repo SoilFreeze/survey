@@ -91,6 +91,22 @@ def harmonize_probe_data(df):
             df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0.0)
     return df
 
+def preprocess_survey_csv(uploaded_file):
+    # 1. Open the file
+    df = pd.read_csv(uploaded_file)
+    
+    # 2. Harmonize the column names immediately
+    # This looks for 'length' and changes it to 'depth'
+    rename_map = {}
+    for col in df.columns:
+        c_low = col.lower().strip()
+        if 'length' in c_low:
+            rename_map[col] = 'depth'
+        elif 'hole' in c_low:
+            rename_map[col] = 'hole_id'
+            
+    # 3. Apply the rename and return the "fixed" data
+    return df.rename(columns=rename_map)
 
 # ==========================================
 # 2. MATH ENGINE (Standardized to 'length')
