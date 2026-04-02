@@ -98,6 +98,8 @@ if choice == "Project Dashboard":
     else:
         st.error("Select or create a project first.")
 
+#### Create New Project ####
+
 elif choice == "1. Create New Project":
     tab1, tab2 = st.tabs(["Create New", "Edit Existing"])
 
@@ -142,6 +144,8 @@ elif choice == "1. Create New Project":
                 st.rerun()
         else:
             st.warning("Select a project from the sidebar to edit it.")
+
+#### Upload Baseline ####
 
 elif choice == "2. Upload Baseline":
     if active_proj is not None:
@@ -193,3 +197,57 @@ elif choice == "2. Upload Baseline":
                     st.success(f"Uploaded {len(df_to_upload)} holes.")
             else:
                 st.error(f"Missing columns: {missing}")
+
+#### Upload top survey ####
+
+elif choice == "3. Upload Top Survey":
+    if active_proj is not None:
+        st.subheader(f"Step 3: Actual Collar Locations for {active_proj['name']}")
+        
+        # Robust aliases for field survey exports
+        column_aliases = {
+            'hole_id': ['hole_id', 'id', 'name', 'hole', 'point', 'station'],
+            'actual_n': ['actual_n', 'north', 'northing', 'y', 'n', 'cady'],
+            'actual_e': ['actual_e', 'east', 'easting', 'x', 'e', 'cadx'],
+            'actual_z': ['actual_z', 'ele', 'elevation', 'z', 'rl', 'level']
+        }
+
+        top_file = st.file_uploader("Upload Actual Top Survey CSV", type=['csv'])
+        
+        if top_file:
+            df_top = pd.read_csv(top_file)
+            rename_map = {}
+            for official_name, aliases in column_aliases.items():
+                for col in df_top.columns:
+                    if col.lower().strip() in aliases:
+                        rename_map[col] = official_name
+                        break
+            
+            df_top = df_top.rename(columns=rename_map)
+            
+            # Validation and String Casting
+            if 'hole_id' in df_top.columns and 'actual_n' in df_top.columns:
+                df_top['hole_id'] = df_top['hole_id'].astype(str)
+                
+                st.write("Ready to update collar locations:")
+                st.dataframe(df_top[['hole_id', 'actual_n', 'actual_e']].head())
+
+                if st.button("Update Holes in BigQuery"):
+                    with st.spinner("Updating records..."):
+                        # We use a loop or a MERGE statement to update specific holes
+                        for _, row in df_top.iterrows():
+                            z_val = row.get('actual_z', 0.0)
+                            update_query = f"""
+                                UPDATE `sensorpush-export.survey.holes`
+                                SET design_n = {row['actual_n']}, 
+                                    design_e = {row['actual_e']},
+                                    design_z = {z_val}
+                                WHERE hole_id = '{row['hole_id']}' 
+                                AND project_id = '{active_proj['project_id']}'
+                            """
+                            client.query(update_query).result()
+                        st.success(f"Updated {len(df_top)} collar locations!")
+            else:
+                st.error("CSV must contain at least Hole_ID and Northing/Easting.")
+    else:
+        st.warning("Select a project in the sidebar first.")
