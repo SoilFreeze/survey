@@ -173,9 +173,9 @@ if category == "Database Maintenance":
                 m = re.search(pattern, name)
                 if m:
                     g = m.groups()
-                    if len(g[0]) == 4: 
+                    if len(g[0]) == 4: # YYYY-MM-DD
                         return f"{g[0]}-{g[1].zfill(2)}-{g[2].zfill(2)}"
-                    else: 
+                    else: # MM-DD-YY
                         yr = "20" + g[2] if len(g[2]) == 2 else g[2]
                         return f"{yr}-{g[0].zfill(2)}-{g[1].zfill(2)}"
                 return datetime.now().strftime('%Y-%m-%d')
@@ -186,26 +186,26 @@ if category == "Database Maintenance":
             # 2. LOAD DATA
             df_dh = pd.read_csv(dh_file)
             
-            # 3. EXPANDED KEYWORD HARVESTER
-            # We create a mapping dictionary to handle variations in CSV headers
+            # 3. ROBUST COLUMN MAPPING
+            # This handles both 'Length' and 'depth' variations found in your samples
             column_mapping = {}
             for col in df_dh.columns:
                 c_low = col.lower().strip()
                 
-                # Logic to catch 'Length' or 'Depth'
-                if c_low in ['length', 'depth', 'measured depth', 'md', 'len']:
+                # Map vertical measurement (Length or depth)
+                if c_low in ['length', 'depth', 'measured depth', 'md']:
                     column_mapping[col] = 'depth'
                 
-                # Logic to catch Hole ID
-                elif any(word in c_low for word in ['hole', 'pipe', 'id', 'name']):
+                # Map Hole ID
+                elif c_low in ['hole', 'pipe', 'hole_id', 'id']:
                     column_mapping[col] = 'hole_id'
                 
-                # Logic to catch Azimuth
-                elif 'azi' in c_low:
+                # Map Azimuth
+                elif 'azimuth' in c_low or 'azi' in c_low:
                     column_mapping[col] = 'azimuth'
                 
-                # Logic to catch Inclination
-                elif 'inc' in c_low or 'dip' in c_low:
+                # Map Inclination
+                elif 'inclination' in c_low or 'inc' in c_low:
                     column_mapping[col] = 'inclination'
 
             df_dh = df_dh.rename(columns=column_mapping)
@@ -218,14 +218,14 @@ if category == "Database Maintenance":
                 df_dh['project_id'] = str(active_proj['project_id'])
                 df_dh['survey_date'] = f_date
                 
-                # Force clean data types
+                # Clean and convert data types
                 df_dh['hole_id'] = df_dh['hole_id'].astype(str).str.strip()
                 df_dh['depth'] = pd.to_numeric(df_dh['depth'], errors='coerce')
                 df_dh['azimuth'] = pd.to_numeric(df_dh['azimuth'], errors='coerce').fillna(0.0)
                 df_dh['inclination'] = pd.to_numeric(df_dh['inclination'], errors='coerce').fillna(0.0)
 
-                # Drop rows where depth or hole_id is missing after conversion
-                df_dh = df_dh.dropna(subset=['hole_id', 'depth'])
+                # Remove any rows where mapping failed to produce numbers (e.g., footer text)
+                df_dh = df_dh.dropna(subset=['depth'])
 
                 st.write("### Data Preview (Corrected Mappings)")
                 st.dataframe(df_dh[['hole_id', 'depth', 'azimuth', 'inclination']].head())
@@ -239,9 +239,8 @@ if category == "Database Maintenance":
                         except Exception as e:
                             st.error(f"BigQuery Error: {e}")
             else:
-                st.error(f"Mapping failed. Missing columns: {', '.join(missing)}")
-                st.write("The app tried to find headers for Depth/Length, Hole ID, Azimuth, and Inclination but failed.")
-                st.write("Current CSV Headers:", list(df_dh.columns))
+                st.error(f"Mapping failed. Missing: {', '.join(missing)}")
+                st.write("Found headers:", list(df_dh.columns))
 
     # --- STEP 5: MANAGE DATA ---
     elif action == "Manage Data":
