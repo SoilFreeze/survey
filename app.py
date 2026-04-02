@@ -221,22 +221,32 @@ if category == "Database Maintenance":
         dh_file = st.file_uploader("Upload Downhole CSV", type=['csv'])
         
         if dh_file and active_proj is not None:
-            # 1. DETECT DATE
+            # 1. FIX THE DATE (Using your get_smart_date function)
             f_date = get_smart_date(dh_file.name)
             st.info(f"📅 Detected Survey Date: **{f_date}**")
             
-            # 2. LOAD & IMMEDIATELY HARMONIZE
-            # This uses the function at the top of your script to turn 'length' into 'length'
+            # 2. OPEN CSV & FORCE HEADERS (The "Clean Slate" Phase)
             raw_df = pd.read_csv(dh_file)
-            df_dh = harmonize_probe_data(raw_df)
             
-            # 3. TRANSLATE TO DATABASE SCHEMA
-            # Your BigQuery table specifically needs 'depth'
-            if 'length' in df_dh.columns:
-                df_dh = df_dh.rename(columns={'length': 'depth'})
-
-            # 4. VALIDATION
-            # Now we check for 'depth' because we just created it above
+            # We apply a map to catch any variation and force it to 'depth' or 'hole_id'
+            # This happens BEFORE any validation or math starts
+            rename_map = {}
+            for col in raw_df.columns:
+                c_low = col.lower().strip()
+                if 'length' in c_low or 'depth' in c_low:
+                    rename_map[col] = 'depth'
+                elif 'hole' in c_low or 'pipe' in c_low:
+                    rename_map[col] = 'hole_id'
+                elif 'azi' in c_low:
+                    rename_map[col] = 'azimuth'
+                elif 'inc' in c_low:
+                    rename_map[col] = 'inclination'
+            
+            # This is the "Fresh" dataframe with fixed headers
+            df_dh = raw_df.rename(columns=rename_map)
+            
+            # 3. START THE REST OF THE CODE
+            # Now that 'depth' is guaranteed to exist, we check for it
             req_cols = ['hole_id', 'depth', 'azimuth', 'inclination']
             missing = [c for c in req_cols if c not in df_dh.columns]
             
@@ -245,22 +255,26 @@ if category == "Database Maintenance":
                 df_dh['project_id'] = str(active_proj['project_id'])
                 df_dh['survey_date'] = f_date
                 
-                st.success("✅ Success: 'length' column found and mapped to 'depth'.")
+                # Cleanup data types
+                for c in ['depth', 'azimuth', 'inclination']:
+                    df_dh[c] = pd.to_numeric(df_dh[c], errors='coerce').fillna(0.0)
+
+                st.success("✅ CSV headers successfully standardized to 'depth'.")
                 st.write("### Data Preview")
                 st.dataframe(df_dh[req_cols].head())
 
                 if st.button("🚀 Upload to BigQuery"):
                     with st.spinner("Pushing to BigQuery..."):
                         try:
-                            # Match BigQuery Table Schema exactly
+                            # Table Schema matches 'depth'
                             final_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
                             upload_to_bq(df_dh[final_cols], "sensorpush-export.survey.surveys")
-                            st.success(f"Uploaded {len(df_dh)} points for {f_date}")
+                            st.success(f"Success! {len(df_dh)} points uploaded for {f_date}")
                         except Exception as e:
-                            st.error(f"BigQuery Reject: {e}")
+                            st.error(f"BigQuery Error: {e}")
             else:
-                st.error(f"Mapping failed. Missing columns: {missing}")
-                st.write("Headers found in your CSV:", list(raw_df.columns))
+                st.error(f"Even after renaming, we are missing: {missing}")
+                st.write("Headers found in CSV:", list(raw_df.columns))
 
 
 # ==========================================
