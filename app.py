@@ -147,66 +147,6 @@ if category == "Database Maintenance":
                 upload_to_bq(df_dh, "sensorpush-export.survey.surveys")
                 st.success("Data Appended!")
 
-elif category == "Reports":
-    action = st.sidebar.radio("Report Type", ["Data Audit", "Deviation Summary", "Export Shifted Data"])
-
-elif category == "Reports":
-    if action == "Data Audit":
-        st.subheader(f"🔍 Data Audit: {active_proj['name']}")
-        
-        # 1. TOTAL COUNTS
-        stats_query = f"""
-            SELECT 
-                (SELECT COUNT(*) FROM `sensorpush-export.survey.holes` WHERE project_id = '{active_proj['project_id']}') as total_baseline,
-                (SELECT COUNT(DISTINCT hole_id) FROM `sensorpush-export.survey.surveys` WHERE project_id = '{active_proj['project_id']}') as unique_downhole,
-                (SELECT COUNT(*) FROM `sensorpush-export.survey.surveys` WHERE project_id = '{active_proj['project_id']}') as total_survey_points
-        """
-        df_stats = run_query(stats_query)
-        
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Baseline Holes", df_stats['total_baseline'][0])
-        col2.metric("Holes w/ Surveys", df_stats['unique_downhole'][0])
-        col3.metric("Total Survey Points", df_stats['total_survey_points'][0])
-
-        st.divider()
-
-        # 2. CHECK FOR BASELINE DOUBLES
-        st.write("### 🚩 Baseline Duplicates")
-        dup_baseline_q = f"""
-            SELECT hole_id, phase, COUNT(*) as count
-            FROM `sensorpush-export.survey.holes`
-            WHERE project_id = '{active_proj['project_id']}'
-            GROUP BY hole_id, phase
-            HAVING count > 1
-        """
-        df_dup_base = run_query(dup_baseline_q)
-        if not df_dup_base.empty:
-            st.error(f"Found {len(df_dup_base)} holes with duplicate baseline entries!")
-            st.dataframe(df_dup_base)
-        else:
-            st.success("No duplicate baseline holes found.")
-
-        st.divider()
-
-        # 3. CHECK FOR MULTIPLE DOWNHOLE RUNS
-        st.write("### 🛰️ Multiple Survey Runs")
-        # This identifies if a hole has more than one survey "set" (e.g., re-run)
-        # Assuming different runs have different survey_types or timestamps
-        dup_survey_q = f"""
-            SELECT hole_id, survey_type, COUNT(DISTINCT depth) as data_points, COUNT(*) as total_entries
-            FROM `sensorpush-export.survey.surveys`
-            WHERE project_id = '{active_proj['project_id']}'
-            GROUP BY hole_id, survey_type
-        """
-        df_surveys = run_query(dup_survey_q)
-        
-        if not df_surveys.empty:
-            # Highlight rows where total_entries / data_points > 1 (indicates overlapping data)
-            st.info("Reviewing survey density per hole:")
-            st.dataframe(df_surveys)
-        else:
-            st.warning("No downhole data found to audit.")
-
 # ==========================================
 # 5. VISUALIZATION
 # ==========================================
