@@ -79,6 +79,23 @@ def standardize_survey_data(df):
             
     return df
 
+def harmonize_probe_data(df):
+    """Maps any variation of headers to standard internal names."""
+    col_map = {}
+    for col in df.columns:
+        c_low = col.lower().strip()
+        if any(k in c_low for k in ['hole', 'pipe', 'id']): col_map[col] = 'hole_id'
+        elif any(k in c_low for k in ['length', 'depth', 'dist']): col_map[col] = 'length'
+        elif 'azi' in c_low: col_map[col] = 'azimuth'
+        elif 'inc' in c_low: col_map[col] = 'inclination'
+    
+    df = df.rename(columns=col_map)
+    # Force numeric types to prevent BQ Schema errors
+    for c in ['length', 'azimuth', 'inclination']:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0.0)
+    return df
+
 # ==========================================
 # 2. MATH ENGINE (Standardized to 'length')
 # ==========================================
@@ -187,59 +204,56 @@ if category == "Database Maintenance":
                 client.delete_table(temp_id)
                 st.success("Surface As-Builts updated.")
 
+    # --- STEP 4: UPLOAD DOWNHOLE (PROBE DATA) ---
     elif action == "Upload Downhole":
         st.subheader("Step 4: Upload Probe Data")
         dh_file = st.file_uploader("Upload Downhole CSV", type=['csv'])
         
         if dh_file and active_proj is not None:
-            # Use the updated date function from above
-            f_date = get_smart_date(dh_file.name)
+            # 1. FIX DATE DETECTION: Specifically target M-D-Y (e.g., 2-13-26)
+            def parse_filename_date(name):
+                pattern = r'(\d{1,2})[.\-](\d{1,2})[.\-](\d{2,4})'
+                m = re.search(pattern, name)
+                if m:
+                    month, day, year = m.groups()
+                    full_yr = "20" + year if len(year) == 2 else year
+                    return f"{full_yr}-{month.zfill(2)}-{day.zfill(2)}"
+                return datetime.now().strftime('%Y-%m-%d')
+
+            f_date = parse_filename_date(dh_file.name)
             st.info(f"📅 Detected Survey Date: **{f_date}**")
             
-            df_dh = pd.read_csv(dh_file)
+            # 2. LOAD & HARMONIZE (This fixes the 'length/depth' error)
+            raw_df = pd.read_csv(dh_file)
+            df_dh = harmonize_probe_data(raw_df)
             
-            # Map headers: find 'length' OR 'depth' and call it 'length' internally
-            col_map = {}
-            for col in df_dh.columns:
-                c_low = col.lower().strip()
-                if any(k in c_low for k in ['hole', 'pipe', 'id']): col_map[col] = 'hole_id'
-                elif any(k in c_low for k in ['length', 'depth']): col_map[col] = 'length'
-                elif 'azi' in c_low: col_map[col] = 'azimuth'
-                elif 'inc' in c_low: col_map[col] = 'inclination'
-            
-            df_dh = df_dh.rename(columns=col_map)
-            
-            # Validation now looks for 'length' (Index 8 in your file)
-            req_cols = ['hole_id', 'length', 'azimuth', 'inclination']
-            missing = [c for c in req_cols if c not in df_dh.columns]
+            # 3. VALIDATE INTERNAL NAMES
+            # We check for 'length' because harmonize_probe_data already renamed it
+            req_internal = ['hole_id', 'length', 'azimuth', 'inclination']
+            missing = [c for c in req_internal if c not in df_dh.columns]
             
             if not missing:
                 df_dh['project_id'] = str(active_proj['project_id'])
                 df_dh['survey_date'] = f_date
                 
-                # Ensure data is numeric
-                for c in ['length', 'azimuth', 'inclination']:
-                    df_dh[c] = pd.to_numeric(df_dh[c], errors='coerce').fillna(0.0)
-
                 st.write("### Data Preview")
-                st.dataframe(df_dh[req_cols].head())
+                st.dataframe(df_dh[req_internal].head())
 
                 if st.button("🚀 Upload to BigQuery"):
-                    with st.spinner("Processing..."):
+                    with st.spinner("Translating and Uploading..."):
                         try:
-                            # IMPORTANT: Rename 'length' to 'depth' for the BigQuery Schema
+                            # 4. FINAL TRANSLATION: Map 'length' -> 'depth' for the BQ Table
                             upload_df = df_dh.copy().rename(columns={'length': 'depth'})
                             
-                            # Match the BigQuery table columns exactly
+                            # Ensure columns match your BigQuery Table Schema exactly
                             final_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
                             upload_to_bq(upload_df[final_cols], "sensorpush-export.survey.surveys")
                             st.success(f"Successfully uploaded {len(df_dh)} points for {f_date}")
                         except Exception as e:
                             st.error(f"BigQuery Error: {e}")
             else:
-                st.error(f"Mapping failed. Could not find: {missing}")
-                st.write("Headers found in CSV:", list(df_dh.columns))
-
+                st.error(f"Could not map CSV columns. Missing: {missing}")
+                st.write("Headers found in your file:", list(raw_df.columns))
     elif action == "Manage Data":
         st.subheader("5. Data Cleanup")
         with st.expander("⚠️ DANGER ZONE"):
