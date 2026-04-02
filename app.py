@@ -40,11 +40,12 @@ def get_file_date(filename):
 # 2. MATH ENGINE (Battered Support)
 # ==========================================
 def calculate_survey_path(df, start_n, start_e):
-    # Standardized to 'length'
-    df = df.sort_values('length')
+    df = df.sort_values('length')  # Changed from depth
     rad_az = np.radians(df['azimuth'])
     rad_inc = np.radians(df['inclination'])
-    dist = df['length'].diff().fillna(0)
+    
+    # Calculate distance between probe readings
+    dist = df['length'].diff().fillna(0) # Changed from depth
     
     dn = dist * np.sin(rad_inc) * np.cos(rad_az)
     de = dist * np.sin(rad_inc) * np.sin(rad_az)
