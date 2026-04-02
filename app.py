@@ -92,60 +92,6 @@ def harmonize_probe_data(df):
     return df
 
 
-elif action == "Upload Downhole":
-        st.subheader("🕵️ Debug Mode: Upload Probe Data")
-        dh_file = st.file_uploader("Upload Downhole CSV", type=['csv'])
-        
-        if dh_file and active_proj is not None:
-            # 1. Debug Date
-            f_date = get_file_date(dh_file.name)
-            st.write(f"**DEBUG 1:** Filename is `{dh_file.name}`. Parsed date is `{f_date}`.")
-            
-            # 2. Inspect Raw CSV
-            raw_df = pd.read_csv(dh_file)
-            st.write("**DEBUG 2:** Raw Headers found in file:")
-            st.json(list(raw_df.columns)) # This shows hidden spaces/characters
-            
-            # 3. Positional Grab (The "Nuclear" Option)
-            try:
-                st.write("**DEBUG 3:** Grabbing data by index...")
-                df_dh = pd.DataFrame()
-                
-                # We use .iloc to bypass names entirely
-                df_dh['hole_id'] = raw_df.iloc[:, 3].astype(str).str.strip()
-                df_dh['azimuth'] = pd.to_numeric(raw_df.iloc[:, 6], errors='coerce')
-                df_dh['inclination'] = pd.to_numeric(raw_df.iloc[:, 7], errors='coerce')
-                df_dh['depth'] = pd.to_numeric(raw_df.iloc[:, 8], errors='coerce') # Grab Index 8
-                
-                st.write(f"**DEBUG 4:** Successfully created internal dataframe with {len(df_dh)} rows.")
-                st.write("Does 'depth' exist in new dataframe?", 'depth' in df_dh.columns)
-                
-            except Exception as e:
-                st.error(f"DEBUG ERROR: Failed at positional mapping. {e}")
-                st.stop()
-
-            # 4. Final Verification
-            # If the red box appears, it's because of THIS check:
-            if 'depth' not in df_dh.columns:
-                st.error("🚨 CRITICAL: The 'depth' column was lost during processing!")
-            else:
-                st.success("✅ 'depth' column is present and ready.")
-                
-                # Add Metadata
-                df_dh['project_id'] = str(active_proj['project_id'])
-                df_dh['survey_date'] = f_date
-                
-                st.write("### Data Preview")
-                st.dataframe(df_dh[['hole_id', 'depth', 'azimuth', 'inclination']].head())
-
-                if st.button("🚀 Upload to BigQuery"):
-                    try:
-                        final_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
-                        upload_to_bq(df_dh[final_cols], "sensorpush-export.survey.surveys")
-                        st.success("Upload successful!")
-                    except Exception as e:
-                        st.error(f"BigQuery Error: {e}")
-
 # ==========================================
 # 2. MATH ENGINE (Standardized to 'length')
 # ==========================================
