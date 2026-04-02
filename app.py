@@ -221,48 +221,47 @@ if category == "Database Maintenance":
         dh_file = st.file_uploader("Upload Downhole CSV", type=['csv'])
         
         if dh_file and active_proj is not None:
-            # 1. DATE DETECTION (Confirmed working for 2026-01-09)
-            f_date = get_file_date(dh_file.name)
+            # 1. DATE DETECTION
+            f_date = get_smart_date(dh_file.name)
             st.info(f"📅 Detected Survey Date: **{f_date}**")
             
-            # 2. LOAD DATA
+            # 2. LOAD & HARMONIZE
+            # We use the function already at the top of your file
             raw_df = pd.read_csv(dh_file)
+            df_dh = standardize_survey_data(raw_df)
             
-            # 3. POSITION-BASED MAPPING (The "No-Name" Fix)
-            # We grab by column index to bypass the "length vs depth" naming war.
-            # Based on your output: 3=hole_id, 6=azimuth, 7=inclination, 8=length
-            try:
-                df_dh = pd.DataFrame()
-                df_dh['hole_id'] = raw_df.iloc[:, 3].astype(str).str.strip()
-                df_dh['azimuth'] = pd.to_numeric(raw_df.iloc[:, 6], errors='coerce').fillna(0.0)
-                df_dh['inclination'] = pd.to_numeric(raw_df.iloc[:, 7], errors='coerce').fillna(0.0)
-                
-                # FORCE Index 8 (your "length" column) to be named "depth" for BigQuery
-                df_dh['depth'] = pd.to_numeric(raw_df.iloc[:, 8], errors='coerce').fillna(0.0)
-                
+            # 3. RENAME FOR BIGQUERY
+            # Your function names it 'length', but BigQuery needs 'depth'
+            if 'length' in df_dh.columns:
+                df_dh = df_dh.rename(columns={'length': 'depth'})
+
+            # 4. VALIDATION
+            req_cols = ['hole_id', 'depth', 'azimuth', 'inclination']
+            missing = [c for c in req_cols if c not in df_dh.columns]
+            
+            if not missing:
                 # Add Metadata
                 df_dh['project_id'] = str(active_proj['project_id'])
                 df_dh['survey_date'] = f_date
                 
-                st.success("✅ Data mapped successfully by column position.")
-            except Exception as e:
-                st.error(f"Positional Mapping Failed: {e}")
-                st.stop()
+                st.success("✅ Successfully mapped columns (Found 'length' and converted to 'depth')")
+                st.write("### Data Preview")
+                st.dataframe(df_dh[req_cols].head())
 
-            # 4. PREVIEW & UPLOAD
-            st.write("### Data Preview")
-            # This confirms 'length' data is now inside the 'depth' column
-            st.dataframe(df_dh[['hole_id', 'depth', 'azimuth', 'inclination']].head())
+                if st.button("🚀 Upload to BigQuery"):
+                    with st.spinner("Pushing to BigQuery..."):
+                        try:
+                            # Table Schema matches 'depth'
+                            final_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
+                            upload_to_bq(df_dh[final_cols], "sensorpush-export.survey.surveys")
+                            st.success(f"Uploaded {len(df_dh)} points for {f_date}")
+                        except Exception as e:
+                            st.error(f"BigQuery Error: {e}")
+            else:
+                st.error(f"Mapping failed. Missing: {missing}")
+                st.write("Headers found in your file:", list(raw_df.columns))
 
-            if st.button("🚀 Upload to BigQuery"):
-                with st.spinner("Pushing to BigQuery..."):
-                    try:
-                        # Match your BigQuery Table Schema exactly
-                        final_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
-                        upload_to_bq(df_dh[final_cols], "sensorpush-export.survey.surveys")
-                        st.success(f"Success! {len(df_dh)} points uploaded for {f_date}")
-                    except Exception as e:
-                        st.error(f"BigQuery Reject: {e}")
+
 # ==========================================
 # 5. VISUALIZATION (FULL ORIGINAL LOGIC)
 # ==========================================
