@@ -183,70 +183,78 @@ if category == "Database Maintenance":
             f_date = get_smart_date(dh_file.name)
             st.info(f"📅 Detected Survey Date: **{f_date}**")
             
-            # 2. LOAD DATA (Handling BOM markers)
-            df_dh = pd.read_csv(dh_file, encoding='utf-8-sig')
+            # 2. LOAD DATA (utf-8-sig handles hidden BOM markers)
+            try:
+                df_dh = pd.read_csv(dh_file, encoding='utf-8-sig')
+            except Exception as e:
+                st.error(f"Error reading CSV: {e}")
+                st.stop()
             
-            # 3. BULLETPROOF MAPPING LOGIC
-            def clean_header(h):
-                # Removes spaces and all non-alphanumeric characters for comparison
-                return re.sub(r'[^a-zA-Z0-9]', '', str(h)).lower()
+            # 3. ADVANCED MAPPING LOGIC
+            # This strips all spaces/special chars to find a match
+            def normalize(text):
+                return re.sub(r'[^a-zA-Z0-9]', '', str(text)).lower().strip()
 
-            mapping = {}
-            for col in df_dh.columns:
-                c = clean_header(col)
-                # Map Depth/Length
-                if c in ['length', 'depth', 'md', 'measureddepth', 'Length']:
-                    mapping[col] = 'depth'
-                # Map Hole ID
-                elif c in ['hole', 'pipe', 'holeid', 'id', 'name']:
-                    mapping[col] = 'hole_id'
-                # Map Azimuth (Allow partial 'azi')
-                elif 'azimuth' in c or 'azi' in c:
-                    mapping[col] = 'azimuth'
-                # Map Inclination (Allow partial 'inc' or 'dip')
-                elif 'inclination' in c or 'inc' in c or 'dip' in c:
-                    mapping[col] = 'inclination'
+            col_map = {}
+            for original_col in df_dh.columns:
+                norm = normalize(original_col)
+                
+                # Priority 1: Depth/Length
+                if norm in ['depth', 'length', 'md', 'measureddepth', 'len']:
+                    col_map[original_col] = 'depth'
+                # Priority 2: Hole ID
+                elif norm in ['hole', 'pipe', 'holeid', 'id']:
+                    col_map[original_col] = 'hole_id'
+                # Priority 3: Azimuth
+                elif 'azimuth' in norm or 'azi' in norm:
+                    col_map[original_col] = 'azimuth'
+                # Priority 4: Inclination
+                elif 'inclination' in norm or 'inc' in norm:
+                    col_map[original_col] = 'inclination'
 
-            df_dh = df_dh.rename(columns=mapping)
+            df_dh = df_dh.rename(columns=col_map)
 
             # 4. VALIDATION
             req_cols = ['hole_id', 'depth', 'azimuth', 'inclination']
             missing = [c for c in req_cols if c not in df_dh.columns]
             
             if not missing:
+                # Success Path
                 df_dh['project_id'] = str(active_proj['project_id'])
                 df_dh['survey_date'] = f_date
                 
-                # Force clean data types
+                # Data cleaning
                 df_dh['hole_id'] = df_dh['hole_id'].astype(str).str.strip()
                 df_dh['depth'] = pd.to_numeric(df_dh['depth'], errors='coerce')
                 df_dh['azimuth'] = pd.to_numeric(df_dh['azimuth'], errors='coerce').fillna(0.0)
                 df_dh['inclination'] = pd.to_numeric(df_dh['inclination'], errors='coerce').fillna(0.0)
 
-                # Drop footer/junk rows
-                df_dh = df_dh.dropna(subset=['depth'])
+                # Drop empty or footer rows
+                df_dh = df_dh.dropna(subset=['depth', 'hole_id'])
 
-                st.write("### Data Preview (Success!)")
+                st.write("### ✅ Mapping Successful")
                 st.dataframe(df_dh[['hole_id', 'depth', 'azimuth', 'inclination']].head())
 
                 if st.button("🚀 Upload to BigQuery"):
-                    with st.spinner(f"Uploading {len(df_dh)} points..."):
-                        try:
-                            final_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
-                            upload_to_bq(df_dh[final_cols], "sensorpush-export.survey.surveys")
-                            st.success(f"Successfully uploaded {len(df_dh)} points for {f_date}")
-                        except Exception as e:
-                            st.error(f"BigQuery Error: {e}")
+                    with st.spinner("Uploading..."):
+                        final_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
+                        upload_to_bq(df_dh[final_cols], "sensorpush-export.survey.surveys")
+                        st.success(f"Uploaded {len(df_dh)} rows.")
             else:
-                # 5. DEBUG VIEW: What did the computer see?
+                # 5. DIAGNOSTIC VIEW (If it fails, this will tell us why)
                 st.error(f"Mapping failed. Missing: {', '.join(missing)}")
-                debug_df = pd.DataFrame({
-                    "Original CSV Header": df_dh.columns,
-                    "Cleaned for Search": [clean_header(c) for c in df_dh.columns],
-                    "Mapped To": [mapping.get(c, "---") for c in df_dh.columns]
-                })
-                st.write("### Mapping Analysis")
-                st.table(debug_df)
+                
+                # Show exactly what the computer is "seeing"
+                debug_data = []
+                for c in df_dh.columns:
+                    debug_data.append({
+                        "CSV Header Found": c,
+                        "Cleaned Version": normalize(c),
+                        "Mapped To": col_map.get(c, "Nothing")
+                    })
+                st.write("### 🔍 Mapping Debugger")
+                st.write("The app is trying to find 'depth' but failed. Look at the table below to see if 'Length' was cleaned correctly:")
+                st.table(debug_data)
 
     # --- STEP 5: MANAGE DATA ---
     elif action == "Manage Data":
