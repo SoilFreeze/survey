@@ -173,9 +173,9 @@ if category == "Database Maintenance":
                 m = re.search(pattern, name)
                 if m:
                     g = m.groups()
-                    if len(g[0]) == 4: # YYYY-MM-DD
+                    if len(g[0]) == 4: 
                         return f"{g[0]}-{g[1].zfill(2)}-{g[2].zfill(2)}"
-                    else: # MM-DD-YY
+                    else: 
                         yr = "20" + g[2] if len(g[2]) == 2 else g[2]
                         return f"{yr}-{g[0].zfill(2)}-{g[1].zfill(2)}"
                 return datetime.now().strftime('%Y-%m-%d')
@@ -183,34 +183,33 @@ if category == "Database Maintenance":
             f_date = get_smart_date(dh_file.name)
             st.info(f"📅 Detected Survey Date: **{f_date}**")
             
-            # 2. LOAD DATA
-            df_dh = pd.read_csv(dh_file)
+            # 2. LOAD DATA (Handling BOM markers)
+            df_dh = pd.read_csv(dh_file, encoding='utf-8-sig')
             
-            # 3. ROBUST COLUMN MAPPING
-            # This handles both 'Length' and 'depth' variations found in your samples
-            column_mapping = {}
+            # 3. BULLETPROOF MAPPING LOGIC
+            def clean_header(h):
+                # Removes spaces and all non-alphanumeric characters for comparison
+                return re.sub(r'[^a-zA-Z0-9]', '', str(h)).lower()
+
+            mapping = {}
             for col in df_dh.columns:
-                c_low = col.lower().strip()
-                
-                # Map vertical measurement (Length or depth)
-                if c_low in ['length', 'depth', 'measured depth', 'md']:
-                    column_mapping[col] = 'depth'
-                
+                c = clean_header(col)
+                # Map Depth/Length
+                if c in ['length', 'depth', 'md', 'measureddepth']:
+                    mapping[col] = 'depth'
                 # Map Hole ID
-                elif c_low in ['hole', 'pipe', 'hole_id', 'id']:
-                    column_mapping[col] = 'hole_id'
-                
-                # Map Azimuth
-                elif 'azimuth' in c_low or 'azi' in c_low:
-                    column_mapping[col] = 'azimuth'
-                
-                # Map Inclination
-                elif 'inclination' in c_low or 'inc' in c_low:
-                    column_mapping[col] = 'inclination'
+                elif c in ['hole', 'pipe', 'holeid', 'id', 'name']:
+                    mapping[col] = 'hole_id'
+                # Map Azimuth (Allow partial 'azi')
+                elif 'azimuth' in c or 'azi' in c:
+                    mapping[col] = 'azimuth'
+                # Map Inclination (Allow partial 'inc' or 'dip')
+                elif 'inclination' in c or 'inc' in c or 'dip' in c:
+                    mapping[col] = 'inclination'
 
-            df_dh = df_dh.rename(columns=column_mapping)
+            df_dh = df_dh.rename(columns=mapping)
 
-            # 4. VALIDATION & CLEANUP
+            # 4. VALIDATION
             req_cols = ['hole_id', 'depth', 'azimuth', 'inclination']
             missing = [c for c in req_cols if c not in df_dh.columns]
             
@@ -218,16 +217,16 @@ if category == "Database Maintenance":
                 df_dh['project_id'] = str(active_proj['project_id'])
                 df_dh['survey_date'] = f_date
                 
-                # Clean and convert data types
+                # Force clean data types
                 df_dh['hole_id'] = df_dh['hole_id'].astype(str).str.strip()
                 df_dh['depth'] = pd.to_numeric(df_dh['depth'], errors='coerce')
                 df_dh['azimuth'] = pd.to_numeric(df_dh['azimuth'], errors='coerce').fillna(0.0)
                 df_dh['inclination'] = pd.to_numeric(df_dh['inclination'], errors='coerce').fillna(0.0)
 
-                # Remove any rows where mapping failed to produce numbers (e.g., footer text)
+                # Drop footer/junk rows
                 df_dh = df_dh.dropna(subset=['depth'])
 
-                st.write("### Data Preview (Corrected Mappings)")
+                st.write("### Data Preview (Success!)")
                 st.dataframe(df_dh[['hole_id', 'depth', 'azimuth', 'inclination']].head())
 
                 if st.button("🚀 Upload to BigQuery"):
@@ -239,8 +238,15 @@ if category == "Database Maintenance":
                         except Exception as e:
                             st.error(f"BigQuery Error: {e}")
             else:
+                # 5. DEBUG VIEW: What did the computer see?
                 st.error(f"Mapping failed. Missing: {', '.join(missing)}")
-                st.write("Found headers:", list(df_dh.columns))
+                debug_df = pd.DataFrame({
+                    "Original CSV Header": df_dh.columns,
+                    "Cleaned for Search": [clean_header(c) for c in df_dh.columns],
+                    "Mapped To": [mapping.get(c, "---") for c in df_dh.columns]
+                })
+                st.write("### Mapping Analysis")
+                st.table(debug_df)
 
     # --- STEP 5: MANAGE DATA ---
     elif action == "Manage Data":
