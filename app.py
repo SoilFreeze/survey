@@ -149,7 +149,38 @@ if category == "Database Maintenance":
                     client.query(f"DELETE FROM `sensorpush-export.survey.holes` WHERE project_id='{p_id}'").result()
                     client.query(f"DELETE FROM `sensorpush-export.survey.projects` WHERE project_id='{p_id}'").result()
                     st.rerun()
+elif action == "Upload Downhole":
+    st.subheader("Step 4: Upload Downhole Survey")
+    dh_file = st.file_uploader("Upload Downhole CSV", type=['csv'])
+    
+    if dh_file and active_proj is not None:
+        file_date = get_file_date(dh_file.name)
+        st.info(f"📅 Extracting data for: {file_date}")
+        
+        # Read and Clean
+        df_dh = pd.read_csv(dh_file)
+        df_dh.columns = [c.lower().strip() for c in df_dh.columns]
+        
+        # Ensure critical columns exist
+        required = ['hole_id', 'depth', 'azimuth', 'inclination']
+        missing = [col for col in required if col not in df_dh.columns]
+        
+        if not missing:
+            df_dh['project_id'] = str(active_proj['project_id'])
+            df_dh['survey_date'] = file_date
+            # Ensure Hole ID is a clean string
+            df_dh['hole_id'] = df_dh['hole_id'].astype(str).str.strip()
 
+            if st.button("🚀 Upload Survey Data"):
+                try:
+                    # Select only the columns that match your BigQuery table
+                    final_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
+                    upload_to_bq(df_dh[final_cols], "sensorpush-export.survey.surveys")
+                    st.success(f"Successfully uploaded {len(df_dh)} data points.")
+                except Exception as e:
+                    st.error(f"BigQuery Error: {e}")
+        else:
+            st.error(f"CSV is missing columns: {', '.join(missing)}")
 # ==========================================
 # 5. VISUALIZATION
 # ==========================================
