@@ -151,12 +151,13 @@ elif choice == "2. Upload Baseline":
     if active_proj is not None:
         st.subheader(f"Step 2: Import Design Baseline for {active_proj['name']}")
         
+    # Updated Aliases to include CADX/CADY
         column_aliases = {
             'hole_id': ['hole_id', 'id', 'name', 'hole', 'point', 'station'],
-            'actual_n': ['actual_n', 'north', 'northing', 'y', 'n', 'cady', 'CADY', 'northing_y', 'pos_y'],
-            'actual_e': ['actual_e', 'east', 'easting', 'x', 'e', 'cadx', 'CADX', 'easting_x', 'pos_x'],
-            'actual_z': ['actual_z', 'ele', 'elevation', 'z', 'rl', 'level', 'height']
-        }
+            'design_n': ['design_n', 'north', 'northing', 'y', 'n', 'cady', 'pos_y'],
+            'design_e': ['design_e', 'east', 'easting', 'x', 'e', 'cadx', 'pos_x'],
+            'design_z': ['design_z', 'ele', 'elevation', 'z', 'rl', 'level', 'elev']
+        }        
 
         baseline_file = st.file_uploader("Upload Baseline CSV", type=['csv'])
         
