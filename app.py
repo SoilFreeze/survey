@@ -80,7 +80,7 @@ category = st.sidebar.selectbox("Category", ["Database Maintenance", "Visualizat
 # 4. DATABASE MAINTENANCE
 # ==========================================
 if category == "Database Maintenance":
-    action = st.radio("Action", ["Project Setup", "Upload Baseline", "Update Top Survey", "Upload Downhole", "Manage Data"], horizontal=True)
+    action = st.radio("Action", ["Project Setup", "Upload Baseline", "Update Top Survey", "Upload Downhole", "Manage Data"], horizontal=True)   
     
     # --- STEP 1: PROJECT SETUP ---
     if action == "Project Setup":
@@ -112,12 +112,13 @@ if category == "Database Maintenance":
         
         if file and active_proj is not None:
             df_base = pd.read_csv(file)
-            # Clean headers: "Hole ID" -> "hole id"
+            # Standardize headers to lowercase for easy matching
             df_base.columns = [c.lower().strip() for c in df_base.columns]
             
-            # 1. AGGRESSIVE MAPPING
+            # 1. EXPANDED MAPPING
+            # Added 'pipe' to the hole_id mapping
             rename_map = {
-                'id':'hole_id', 'name':'hole_id', 'hole':'hole_id', 'hole id':'hole_id', 'hole_id':'hole_id',
+                'pipe':'hole_id', 'id':'hole_id', 'name':'hole_id', 'hole':'hole_id', 'hole id':'hole_id',
                 'north':'design_n', 'northing':'design_n', 'y':'design_n',
                 'east':'design_e', 'easting':'design_e', 'x':'design_e',
                 'elev':'design_z', 'elevation':'design_z', 'z':'design_z',
@@ -128,11 +129,12 @@ if category == "Database Maintenance":
             }
             df_base = df_base.rename(columns=rename_map)
             
-            # 2. ENSURE ALL DB COLUMNS EXIST (Fills missing with defaults)
-            # This prevents the "missing in new schema" error from BigQuery
-            required_columns = {
+            # 2. FORCE COMPLETE SCHEMA
+            # We create a dictionary of every column the DB expects.
+            # If it's not in the CSV, we use a sensible default.
+            db_schema = {
                 'project_id': str(active_proj['project_id']),
-                'hole_id': None, # Must be in CSV
+                'hole_id': None, # Critical
                 'design_n': 0.0,
                 'design_e': 0.0,
                 'design_z': 0.0,
@@ -143,31 +145,34 @@ if category == "Database Maintenance":
                 'design_length': active_proj.get('default_length', 100.0)
             }
 
-            for col, default in required_columns.items():
+            for col, default in db_schema.items():
                 if col not in df_base.columns:
                     df_base[col] = default
             
-            # 3. VERIFY HOLE_ID
+            # 3. VALIDATION & PREVIEW
             if df_base['hole_id'].isnull().all():
-                st.error("❌ Could not find a 'Hole ID' or 'ID' column in your CSV. Please check your headers.")
-                st.write("Found columns:", list(df_base.columns))
+                st.error("❌ Could not find the pipe names. Found columns: " + str(list(df_base.columns)))
             else:
-                st.success(f"✅ Found {len(df_base)} holes. Ready for upload.")
+                st.success(f"✅ Recognized {len(df_base)} pipes. Ready to upload.")
                 st.dataframe(df_base[['hole_id', 'pipe_type', 'design_n', 'design_e']].head())
 
                 if st.button("🚀 Confirm & Overwrite Phase"):
-                    with st.spinner("Uploading to BigQuery..."):
+                    with st.spinner("Processing 1,105-hole grid..."):
                         p_id = str(active_proj['project_id'])
                         phase_name = df_base['phase'].iloc[0]
                         
-                        # Wipe old data for this specific phase
+                        # Clear old data for this project phase
                         client.query(f"DELETE FROM `sensorpush-export.survey.holes` WHERE project_id = '{p_id}' AND phase = '{phase_name}'").result()
                         
-                        # Force the exact column order the DB expects
-                        final_df = df_base[list(required_columns.keys())]
+                        # Re-order columns exactly as BigQuery expects
+                        final_df = df_base[list(db_schema.keys())]
                         
-                        upload_to_bq(final_df, "sensorpush-export.survey.holes")
-                        st.success(f"Baseline updated for {phase_name}")
+                        try:
+                            upload_to_bq(final_df, "sensorpush-export.survey.holes")
+                            st.success(f"Baseline for {phase_name} updated.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Upload failed. Technical details: {e}")
 
     # --- STEP 3: UPDATE TOP SURVEY (AS-BUILT) ---
     elif action == "Update Top Survey":
