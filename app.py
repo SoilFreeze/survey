@@ -147,39 +147,54 @@ elif choice == "2. Upload Baseline":
     if active_proj is not None:
         st.subheader(f"Step 2: Import Design Baseline for {active_proj['name']}")
         
-        # 1. Instructions and Template
-        st.info("Upload a CSV with these headers: hole_id, design_n, design_e, design_z")
-        
-        # 2. File Uploader
-        baseline_file = st.file_uploader("Choose Baseline CSV", type=['csv'])
+        # 1. Define Robust Mapping Aliases
+        # This list covers your common variations like 'Ele', 'ID', 'North', etc.
+        column_aliases = {
+            'hole_id': ['hole_id', 'id', 'name', 'hole', 'point', 'station'],
+            'design_n': ['design_n', 'north', 'northing', 'y', 'n'],
+            'design_e': ['design_e', 'east', 'easting', 'x', 'e'],
+            'design_z': ['design_z', 'ele', 'elevation', 'z', 'rl', 'level']
+        }
+
+        baseline_file = st.file_uploader("Upload Baseline CSV (Robust Header Support)", type=['csv'])
         
         if baseline_file:
             df_base = pd.read_csv(baseline_file)
+            raw_cols = [c.lower().strip() for c in df_base.columns]
+            rename_map = {}
+
+            # 2. Automated Mapping Logic
+            for official_name, aliases in column_aliases.items():
+                for col in df_base.columns:
+                    if col.lower().strip() in aliases:
+                        rename_map[col] = official_name
+                        break # Found the best match for this official column
+
+            # 3. Apply Renaming
+            df_base = df_base.rename(columns=rename_map)
             
-            # Data Cleaning: Ensure column names match BigQuery schema
-            df_base.columns = [c.lower().strip() for c in df_base.columns]
-            
-            # Validation
-            required_cols = ['hole_id', 'design_n', 'design_e', 'design_z']
-            if all(col in df_base.columns for col in required_cols):
-                # Add the project_id to link these holes to the active project
+            # Check if we have the minimum required data after renaming
+            required = ['hole_id', 'design_n', 'design_e']
+            missing = [col for col in required if col not in df_base.columns]
+
+            if not missing:
+                # Add default Z if missing, and add project link
+                if 'design_z' not in df_base.columns:
+                    df_base['design_z'] = 0.0
+                
                 df_base['project_id'] = active_proj['project_id']
                 
-                # Show preview
-                st.write("Preview of Design Data:", df_base.head())
+                # Filter to only the columns our database expects
+                final_cols = ['project_id', 'hole_id', 'design_n', 'design_e', 'design_z']
+                df_to_upload = df_base[final_cols].copy()
+
+                st.write("✅ Headers mapped successfully!")
+                st.dataframe(df_to_upload.head())
                 
                 if st.button("Confirm & Upload to BigQuery"):
-                    with st.spinner("Writing to database..."):
-                        # We use WRITE_TRUNCATE if you want to overwrite, 
-                        # or WRITE_APPEND to add to existing
-                        job_config = bigquery.LoadJobConfig(write_disposition="WRITE_APPEND")
-                        
-                        try:
-                            upload_to_bq(df_base, "sensorpush-export.survey.holes")
-                            st.success(f"Successfully loaded {len(df_base)} holes for {active_proj['name']}.")
-                        except Exception as e:
-                            st.error(f"Error uploading: {e}")
+                    upload_to_bq(df_to_upload, "sensorpush-export.survey.holes")
+                    st.success(f"Uploaded {len(df_to_upload)} holes.")
             else:
-                st.error(f"CSV missing columns. Required: {required_cols}")
+                st.error(f"Could not find columns for: {missing}. Found: {list(df_base.columns)}")
     else:
-        st.warning("Please select or create a project in the sidebar first.")
+        st.warning("Please select a project in the sidebar first.")
