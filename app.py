@@ -200,60 +200,59 @@ elif choice == "2. Upload Baseline":
 
 elif choice == "3. Upload Top Survey":
     if active_proj is not None:
-        st.subheader(f"Step 3: Actual Collar Locations for {active_proj['name']}")
+        st.subheader(f"Step 3: Fast Batch Update for {active_proj['name']}")
         
-        # Expanded aliases to catch 'x', 'y', 'pos_x', 'coord_y', etc.
         column_aliases = {
-            'hole_id': ['hole_id', 'id', 'name', 'hole', 'point', 'station'],
-            'actual_n': ['actual_n', 'north', 'northing', 'y', 'n', 'cady', 'CADY', 'northing_y', 'pos_y'],
-            'actual_e': ['actual_e', 'east', 'easting', 'x', 'e', 'cadx', 'CADX', 'easting_x', 'pos_x'],
-            'actual_z': ['actual_z', 'ele', 'elevation', 'z', 'rl', 'level', 'height']
+            'hole_id': ['hole_id', 'id', 'name', 'hole', 'point', 'station', 'label'],
+            'actual_n': ['actual_n', 'north', 'northing', 'y', 'n', 'cady', 'pos_y', 'cady'],
+            'actual_e': ['actual_e', 'east', 'easting', 'x', 'e', 'cadx', 'pos_x', 'cadx'],
+            'actual_z': ['actual_z', 'ele', 'elevation', 'z', 'rl', 'level', 'elev', 'height']
         }
 
         top_file = st.file_uploader("Upload Actual Top Survey CSV", type=['csv'])
         
         if top_file:
             df_top = pd.read_csv(top_file)
-            
-            # Robust mapping logic
             rename_map = {}
             for official_name, aliases in column_aliases.items():
                 for col in df_top.columns:
-                    c_low = col.lower().strip()
-                    # Check for exact alias or if the alias is a standalone 'x' or 'y'
-                    if c_low in aliases or (len(c_low) == 1 and c_low in aliases):
+                    if col.lower().strip() in aliases:
                         rename_map[col] = official_name
                         break
             
             df_top = df_top.rename(columns=rename_map)
             
-            # Ensure ID is treated as a string to prevent BigQuery errors
-            if 'hole_id' in df_top.columns:
-                df_top['hole_id'] = df_top['hole_id'].astype(str)
-                
-                # Validation check for required coordinates
-                if 'actual_n' in df_top.columns and 'actual_e' in df_top.columns:
-                    st.success("Found Northing and Easting (X/Y) columns!")
-                    st.dataframe(df_top[['hole_id', 'actual_n', 'actual_e']].head())
+            if 'hole_id' in df_top.columns and 'actual_n' in df_top.columns:
+                # Preserve exact labels and project ID
+                df_top['hole_id'] = df_top['hole_id'].astype(str).str.strip()
+                df_top['project_id'] = str(active_proj['project_id'])
+                if 'actual_z' not in df_top.columns: df_top['actual_z'] = 0.0
 
-                    if st.button("Update Actual Top Coordinates"):
-                        with st.spinner("Updating BigQuery..."):
-                            for _, row in df_top.iterrows():
-                                # We update the design_n/e to the actual field locations
-                                z_val = row.get('actual_z', 0.0)
-                                update_query = f"""
-                                    UPDATE `sensorpush-export.survey.holes`
-                                    SET design_n = {row['actual_n']}, 
-                                        design_e = {row['actual_e']},
-                                        design_z = {z_val}
-                                    WHERE hole_id = '{row['hole_id']}' 
-                                    AND project_id = '{active_proj['project_id']}'
-                                """
-                                client.query(update_query).result()
-                            st.success(f"Updated {len(df_top)} holes with actual coordinates.")
-                else:
-                    st.error("Could not identify Northing (Y) or Easting (X) columns.")
+                st.write(f"Prepared {len(df_top)} holes for batch update.")
+
+                if st.button("🚀 Run Fast Update"):
+                    with st.spinner("Processing batch update in BigQuery..."):
+                        # 1. Upload to a temporary "staging" table
+                        temp_table_id = f"sensorpush-export.survey.temp_top_{active_proj['project_id']}"
+                        job_config = bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE")
+                        client.load_table_from_dataframe(df_top, temp_table_id, job_config=job_config).result()
+
+                        # 2. Execute a single MERGE command (The "Fast" part)
+                        merge_query = f"""
+                            MERGE `sensorpush-export.survey.holes` T
+                            USING `{temp_table_id}` S
+                            ON T.hole_id = S.hole_id AND T.project_id = S.project_id
+                            WHEN MATCHED THEN
+                              UPDATE SET 
+                                T.design_n = S.actual_n, 
+                                T.design_e = S.actual_e, 
+                                T.design_z = S.actual_z
+                        """
+                        client.query(merge_query).result()
+                        
+                        # 3. Clean up
+                        client.delete_table(temp_table_id, not_found_ok=True)
+                        
+                        st.success(f"Successfully updated {len(df_top)} holes in seconds!")
             else:
-                st.error("Could not identify Hole_ID column.")
-    else:
-        st.warning("Select a project in the sidebar first.")
+                st.error("Missing required columns (ID, North, East).")
