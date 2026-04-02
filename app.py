@@ -29,6 +29,7 @@ def upload_to_bq(df, table_id, write_mode="WRITE_APPEND"):
     job_config = bigquery.LoadJobConfig(write_disposition=write_mode)
     job = client.load_table_from_dataframe(df, table_id, job_config=job_config)
     return job.result()
+    
 ##### Function Junction #####
 
 def get_smart_date(name):
@@ -45,6 +46,38 @@ def get_smart_date(name):
     
     # Fallback to current date if no pattern is found
     return datetime.now().strftime('%Y-%m-%d')
+
+def standardize_survey_data(df):
+    """
+    Maps varied CSV headers (length, depth, dist, etc.) to a 
+    standard internal 'length' column for calculations.
+    """
+    # 1. Create a map of potential variations to our standard internal names
+    col_map = {}
+    for col in df.columns:
+        c_low = col.lower().strip()
+        # Map Hole ID variations
+        if any(k in c_low for k in ['hole', 'pipe', 'id']): 
+            col_map[col] = 'hole_id'
+        # Map Length/Depth variations to 'length' internally
+        elif any(k in c_low for k in ['length', 'depth', 'dist']): 
+            col_map[col] = 'length'
+        # Map Azimuth variations
+        elif 'azi' in c_low: 
+            col_map[col] = 'azimuth'
+        # Map Inclination variations
+        elif 'inc' in c_low: 
+            col_map[col] = 'inclination'
+
+    # 2. Rename columns based on the harvester results
+    df = df.rename(columns=col_map)
+    
+    # 3. Clean and convert to numeric to prevent math errors
+    for c in ['length', 'azimuth', 'inclination']:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0.0)
+            
+    return df
 
 # ==========================================
 # 2. MATH ENGINE (Standardized to 'length')
