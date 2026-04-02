@@ -32,19 +32,14 @@ def upload_to_bq(df, table_id, write_mode="WRITE_APPEND"):
     
 ##### Function Junction #####
 
-def get_smart_date(name):
-    # This regex specifically looks for 1-2 digit month, 1-2 digit day, and 2 or 4 digit year
-    # Example: '2-13-26' or '02.13.2026'
-    pattern = r'(\d{1,2})[.\-](\d{1,2})[.\-](\d{2,4})'
-    m = re.search(pattern, name)
-    if m:
-        month, day, year = m.groups()
-        # If year is '26', convert it to '2026'
-        full_year = "20" + year if len(year) == 2 else year
-        # Returns YYYY-MM-DD for BigQuery compatibility
+def get_smart_date(filename):
+    # Specifically targets Month-Day-Year (e.g., 2-18-26)
+    match = re.search(r'(\d{1,2})[.\-](\d{1,2})[.\-](\d{2,4})', filename)
+    if match:
+        month, day, year = match.groups()
+        # Convert '26' to '2026'
+        full_year = f"20{year}" if len(year) == 2 else year
         return f"{full_year}-{month.zfill(2)}-{day.zfill(2)}"
-    
-    # Fallback to current date if no pattern is found
     return datetime.now().strftime('%Y-%m-%d')
 
 def standardize_survey_data(df):
@@ -96,22 +91,60 @@ def harmonize_probe_data(df):
             df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0.0)
     return df
 
-def harmonize_headers(df):
-    """Automatically maps length/depth variations and ensures numeric types."""
-    col_map = {}
-    for col in df.columns:
-        c_low = col.lower().strip()
-        if any(k in c_low for k in ['hole', 'pipe', 'id']): col_map[col] = 'hole_id'
-        elif any(k in c_low for k in ['length', 'depth', 'dist']): col_map[col] = 'length'
-        elif 'azi' in c_low: col_map[col] = 'azimuth'
-        elif 'inc' in c_low: col_map[col] = 'inclination'
-    
-    df = df.rename(columns=col_map)
-    # Clean up the numbers immediately
-    for c in ['length', 'azimuth', 'inclination']:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0.0)
-    return df
+elif action == "Upload Downhole":
+        st.subheader("Step 4: Upload Probe Data")
+        dh_file = st.file_uploader("Upload Downhole CSV", type=['csv'])
+        
+        if dh_file and active_proj is not None:
+            # Use the new date function
+            f_date = get_smart_date(dh_file.name)
+            st.info(f"📅 Detected Survey Date: **{f_date}**")
+            
+            df_dh = pd.read_csv(dh_file)
+            
+            # THE HARVESTER: Maps whatever you have to internal names
+            for col in df_dh.columns:
+                c_low = col.lower().strip()
+                if 'hole' in c_low or 'pipe' in c_low:
+                    df_dh = df_dh.rename(columns={col: 'hole_id'})
+                elif 'length' in c_low or 'depth' in c_low:
+                    # We map everything to 'length' internally now
+                    df_dh = df_dh.rename(columns={col: 'length'})
+                elif 'azi' in c_low:
+                    df_dh = df_dh.rename(columns={col: 'azimuth'})
+                elif 'inc' in c_low:
+                    df_dh = df_dh.rename(columns={col: 'inclination'})
+
+            # THE VALIDATION: Now checking for 'length' which matches your CSV
+            req_cols = ['hole_id', 'length', 'azimuth', 'inclination']
+            missing = [c for c in req_cols if c not in df_dh.columns]
+            
+            if not missing:
+                df_dh['project_id'] = str(active_proj['project_id'])
+                df_dh['survey_date'] = f_date
+                
+                # Numeric cleanup
+                for c in ['length', 'azimuth', 'inclination']:
+                    df_dh[c] = pd.to_numeric(df_dh[c], errors='coerce').fillna(0.0)
+
+                st.write("### Data Preview")
+                st.dataframe(df_dh[req_cols].head())
+
+                if st.button("🚀 Upload to BigQuery"):
+                    with st.spinner("Uploading..."):
+                        try:
+                            # IMPORTANT: Rename 'length' back to 'depth' ONLY for BigQuery
+                            upload_df = df_dh.copy().rename(columns={'length': 'depth'})
+                            final_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
+                            
+                            upload_to_bq(upload_df[final_cols], "sensorpush-export.survey.surveys")
+                            st.success(f"Successfully uploaded {len(df_dh)} points for {f_date}")
+                        except Exception as e:
+                            st.error(f"BigQuery Error: {e}")
+            else:
+                # This error will no longer trigger for 'depth' if 'length' is present
+                st.error(f"Mapping failed. Missing columns: {', '.join(missing)}")
+                st.write("Headers found in CSV:", list(df_dh.columns))
 
 # ==========================================
 # 2. MATH ENGINE (Standardized to 'length')
