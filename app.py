@@ -153,8 +153,8 @@ elif choice == "2. Upload Baseline":
         
         column_aliases = {
             'hole_id': ['hole_id', 'id', 'name', 'hole', 'point', 'station'],
-            'actual_n': ['actual_n', 'north', 'northing', 'y', 'n', 'cady', 'northing_y', 'pos_y'],
-            'actual_e': ['actual_e', 'east', 'easting', 'x', 'e', 'cadx', 'easting_x', 'pos_x'],
+            'actual_n': ['actual_n', 'north', 'northing', 'y', 'n', 'cady', 'CADY', 'northing_y', 'pos_y'],
+            'actual_e': ['actual_e', 'east', 'easting', 'x', 'e', 'cadx', 'CADX', 'easting_x', 'pos_x'],
             'actual_z': ['actual_z', 'ele', 'elevation', 'z', 'rl', 'level', 'height']
         }
 
@@ -207,8 +207,8 @@ elif choice == "3. Upload Top Survey":
         # Expanded aliases to catch 'x', 'y', 'pos_x', 'coord_y', etc.
         column_aliases = {
             'hole_id': ['hole_id', 'id', 'name', 'hole', 'point', 'station'],
-            'actual_n': ['actual_n', 'north', 'northing', 'y', 'n', 'cady', 'northing_y', 'pos_y'],
-            'actual_e': ['actual_e', 'east', 'easting', 'x', 'e', 'cadx', 'easting_x', 'pos_x'],
+            'actual_n': ['actual_n', 'north', 'northing', 'y', 'n', 'cady', 'CADY', 'northing_y', 'pos_y'],
+            'actual_e': ['actual_e', 'east', 'easting', 'x', 'e', 'cadx', 'CADX', 'easting_x', 'pos_x'],
             'actual_z': ['actual_z', 'ele', 'elevation', 'z', 'rl', 'level', 'height']
         }
 
