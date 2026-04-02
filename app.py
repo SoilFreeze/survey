@@ -82,6 +82,8 @@ category = st.sidebar.selectbox("Category", ["Database Maintenance", "Visualizat
 # ==========================================
 if category == "Database Maintenance":
     action = st.radio("Action", ["Project Setup", "Upload Baseline", "Update Top Survey", "Upload Downhole"], horizontal=True)
+
+#### Project Setup ####
     
     if action == "Project Setup":
         tab1, tab2 = st.tabs(["Create New", "Edit Origin"])
@@ -102,20 +104,197 @@ if category == "Database Maintenance":
                 if st.button("Update Origin"):
                     client.query(f"UPDATE `sensorpush-export.survey.projects` SET origin_north={u_on}, origin_east={u_oe} WHERE project_id='{active_proj['project_id']}'")
                     st.rerun()
+                    
+#### Upload Baseline ####
 
-    elif action == "Upload Baseline":
-        st.info("Required: hole_id, north, east, elev, phase")
-        file = st.file_uploader("Upload Baseline CSV", type=['csv'])
-        if file and active_proj is not None:
-            df = pd.read_csv(file)
-            # Add robust mapping and type casting here
-            df['hole_id'] = df['hole_id'].astype(str).str.strip()
-            df['project_id'] = active_proj['project_id']
-            if st.button("Upload Baseline"):
-                upload_to_bq(df, "sensorpush-export.survey.holes")
-                st.success("Baseline uploaded.")
+   elif action == "Upload Baseline":
+    st.subheader(f"Step 2: Import Design Baseline for {active_proj['name']}")
+    
+    # Robust aliases for various naming conventions
+    column_aliases = {
+        'hole_id': ['hole_id', 'id', 'name', 'hole', 'point', 'station', 'label'],
+        'design_n': ['design_n', 'north', 'northing', 'y', 'n', 'cady', 'pos_y', 'cadx'],
+        'design_e': ['design_e', 'east', 'easting', 'x', 'e', 'cadx', 'pos_x', 'cady'],
+        'design_z': ['design_z', 'ele', 'elevation', 'z', 'rl', 'level', 'elev', 'height'],
+        'phase': ['phase', 'stage', 'section', 'area', 'zone']
+    }
 
-    # [Update Top Survey and Upload Downhole follow similar logic blocks]
+    file = st.file_uploader("Upload Baseline CSV", type=['csv'])
+    
+    if file and active_proj is not None:
+        df_base = pd.read_csv(file)
+        
+        # 1. Robust Header Mapping
+        rename_map = {}
+        for official_name, aliases in column_aliases.items():
+            for col in df_base.columns:
+                if col.lower().strip() in aliases:
+                    rename_map[col] = official_name
+                    break
+        
+        df_base = df_base.rename(columns=rename_map)
+        
+        # 2. Data Normalization & Defaulting
+        # Ensure Hole ID is a string and project ID is linked
+        df_base['hole_id'] = df_base['hole_id'].astype(str).str.strip()
+        df_base['project_id'] = str(active_proj['project_id'])
+        
+        # DEFAULT LOGIC: If 'phase' wasn't mapped, create it as 'Phase1'
+        if 'phase' not in df_base.columns:
+            df_base['phase'] = "Phase1"
+        else:
+            # If the column exists but some rows are empty, fill them
+            df_base['phase'] = df_base['phase'].fillna("Phase1").astype(str)
+
+        # Ensure Z exists
+        if 'design_z' not in df_base.columns:
+            df_base['design_z'] = 0.0
+
+        # 3. Final Column Selection for BigQuery
+        required = ['project_id', 'hole_id', 'design_n', 'design_e', 'design_z', 'phase']
+        
+        # Check if we have the absolute minimums to proceed
+        if 'design_n' in df_base.columns and 'design_e' in df_base.columns:
+            df_final = df_base[required].copy()
+            
+            st.write("✅ Ready for upload. Review Phase assignments:")
+            st.dataframe(df_final[['hole_id', 'phase', 'design_n', 'design_e']].head())
+
+            if st.button("Confirm & Upload to BigQuery"):
+                with st.spinner("Writing to Database..."):
+                    try:
+                        upload_to_bq(df_final, "sensorpush-export.survey.holes")
+                        st.success(f"Successfully loaded {len(df_final)} holes.")
+                        st.rerun() # Refresh to update the Sidebar Phase filter
+                    except Exception as e:
+                        st.error(f"Database Error: {e}")
+        else:
+            st.error("Missing coordinate columns (North/East/X/Y).")
+
+#### Update Top Survey ####
+
+elif choice == "3. Upload Top Survey":
+    if active_proj is not None:
+        st.subheader(f"Step 3: Fast Batch Update for {active_proj['name']}")
+        
+        column_aliases = {
+            'hole_id': ['hole_id', 'id', 'name', 'hole', 'point', 'station', 'label'],
+            'actual_n': ['actual_n', 'north', 'northing', 'y', 'n', 'cady', 'pos_y', 'cady'],
+            'actual_e': ['actual_e', 'east', 'easting', 'x', 'e', 'cadx', 'pos_x', 'cadx'],
+            'actual_z': ['actual_z', 'ele', 'elevation', 'z', 'rl', 'level', 'elev', 'height']
+        }
+
+        top_file = st.file_uploader("Upload Actual Top Survey CSV", type=['csv'])
+        
+        if top_file:
+            df_top = pd.read_csv(top_file)
+            rename_map = {}
+            for official_name, aliases in column_aliases.items():
+                for col in df_top.columns:
+                    if col.lower().strip() in aliases:
+                        rename_map[col] = official_name
+                        break
+            
+            df_top = df_top.rename(columns=rename_map)
+            
+            if 'hole_id' in df_top.columns and 'actual_n' in df_top.columns:
+                # Preserve exact labels and project ID
+                df_top['hole_id'] = df_top['hole_id'].astype(str).str.strip()
+                df_top['project_id'] = str(active_proj['project_id'])
+                if 'actual_z' not in df_top.columns: df_top['actual_z'] = 0.0
+
+                st.write(f"Prepared {len(df_top)} holes for batch update.")
+
+                if st.button("🚀 Run Fast Update"):
+                    with st.spinner("Processing batch update in BigQuery..."):
+                        # 1. Upload to a temporary "staging" table
+                        temp_table_id = f"sensorpush-export.survey.temp_top_{active_proj['project_id']}"
+                        job_config = bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE")
+                        client.load_table_from_dataframe(df_top, temp_table_id, job_config=job_config).result()
+
+                        # 2. Execute a single MERGE command (The "Fast" part)
+                        merge_query = f"""
+                            MERGE `sensorpush-export.survey.holes` T
+                            USING `{temp_table_id}` S
+                            ON T.hole_id = S.hole_id AND T.project_id = S.project_id
+                            WHEN MATCHED THEN
+                              UPDATE SET 
+                                T.design_n = S.actual_n, 
+                                T.design_e = S.actual_e, 
+                                T.design_z = S.actual_z
+                        """
+                        client.query(merge_query).result()
+                        
+                        # 3. Clean up
+                        client.delete_table(temp_table_id, not_found_ok=True)
+                        
+                        st.success(f"Successfully updated {len(df_top)} holes in seconds!")
+            else:
+                st.error("Missing required columns (ID, North, East).")
+                
+#### Upload Downhole ####
+
+elif choice == "4. Upload Downhole":
+    if active_proj is not None:
+        st.subheader(f"Step 4: Import Downhole Survey for {active_proj['name']}")
+        
+        # Robust aliases for Boretrak, Gyro, or Deviometer files
+        column_aliases = {
+            'hole_id': ['hole_id', 'id', 'name', 'hole', 'point', 'station', 'label'],
+            'depth': ['depth', 'md', 'length', 'dist', 'distance', 'measured_depth'],
+            'azimuth': ['azimuth', 'azi', 'az', 'dir', 'direction', 'bearing'],
+            'inclination': ['inclination', 'inc', 'dip', 'angle', 'vertical_angle']
+        }
+
+        # Optional: Add a 'Survey Type' selector for the database
+        s_type = st.selectbox("Survey Type", ["Pipe", "Casing", "Pre-Freeze", "Post-Freeze"])
+        
+        downhole_file = st.file_uploader("Upload Downhole CSV (Depth, Azi, Inc)", type=['csv'])
+        
+        if downhole_file:
+            df_dh = pd.read_csv(downhole_file)
+            
+            # Robust mapping logic
+            rename_map = {}
+            for official_name, aliases in column_aliases.items():
+                for col in df_dh.columns:
+                    if col.lower().strip() in aliases:
+                        rename_map[col] = official_name
+                        break
+            
+            df_dh = df_dh.rename(columns=rename_map)
+            
+            # Ensure IDs are strings to match BigQuery schema
+            if 'hole_id' in df_dh.columns:
+                df_dh['hole_id'] = df_dh['hole_id'].astype(str).str.strip()
+                df_dh['project_id'] = str(active_proj['project_id'])
+                df_dh['survey_type'] = s_type
+                
+                # Check for minimum required survey data
+                required = ['depth', 'azimuth', 'inclination']
+                missing = [c for c in required if c not in df_dh.columns]
+                
+                if not missing:
+                    st.write(f"✅ Found {len(df_dh)} survey points.")
+                    st.dataframe(df_dh[['hole_id', 'depth', 'azimuth', 'inclination']].head())
+                    
+                    if st.button("Confirm & Append to BigQuery"):
+                        with st.spinner("Uploading survey data..."):
+                            # We append here so you don't lose old survey runs
+                            final_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_type']
+                            df_to_push = df_dh[final_cols].copy()
+                            
+                            try:
+                                upload_to_bq(df_to_push, "sensorpush-export.survey.surveys")
+                                st.success(f"Added {len(df_to_push)} points to {active_proj['name']}.")
+                            except Exception as e:
+                                st.error(f"Upload failed: {e}")
+                else:
+                    st.error(f"Missing survey columns: {missing}")
+            else:
+                st.error("Could not find Hole ID column.")
+    else:
+        st.warning("Select a project in the sidebar first.")
 
 # ==========================================
 # 5. VISUALIZATION (ANALYSIS)
