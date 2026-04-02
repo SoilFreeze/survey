@@ -82,8 +82,6 @@ category = st.sidebar.selectbox("Category", ["Database Maintenance", "Visualizat
 # ==========================================
 if category == "Database Maintenance":
     action = st.radio("Action", ["Project Setup", "Upload Baseline", "Update Top Survey", "Upload Downhole"], horizontal=True)
-
-#### Project Setup ####
     
     if action == "Project Setup":
         tab1, tab2 = st.tabs(["Create New", "Edit Origin"])
@@ -94,8 +92,9 @@ if category == "Database Maintenance":
                 n_on = st.number_input("Origin Northing (0,0 point)", format="%.3f")
                 n_oe = st.number_input("Origin Easting (0,0 point)", format="%.3f")
                 if st.form_submit_button("Save"):
-                    upload_to_bq(pd.DataFrame([{'project_id':n_id, 'name':n_name, 'origin_north':n_on, 'origin_east':n_oe}]), 
-                                 "sensorpush-export.survey.projects")
+                    new_df = pd.DataFrame([{'project_id':n_id, 'name':n_name, 'origin_north':n_on, 'origin_east':n_oe}])
+                    upload_to_bq(new_df, "sensorpush-export.survey.projects")
+                    st.success("Project Created!")
                     st.rerun()
         with tab2:
             if active_proj is not None:
@@ -103,73 +102,34 @@ if category == "Database Maintenance":
                 u_oe = st.number_input("Update Origin East", value=float(active_proj['origin_east']), format="%.3f")
                 if st.button("Update Origin"):
                     client.query(f"UPDATE `sensorpush-export.survey.projects` SET origin_north={u_on}, origin_east={u_oe} WHERE project_id='{active_proj['project_id']}'")
+                    st.success("Origin Updated!")
                     st.rerun()
-                    
-#### Upload Baseline ####
 
-   elif action == "Upload Baseline":
-    st.subheader(f"Step 2: Import Design Baseline for {active_proj['name']}")
-    
-    # Robust aliases for various naming conventions
-    column_aliases = {
-        'hole_id': ['hole_id', 'id', 'name', 'hole', 'point', 'station', 'label'],
-        'design_n': ['design_n', 'north', 'northing', 'y', 'n', 'cady', 'pos_y', 'cadx'],
-        'design_e': ['design_e', 'east', 'easting', 'x', 'e', 'cadx', 'pos_x', 'cady'],
-        'design_z': ['design_z', 'ele', 'elevation', 'z', 'rl', 'level', 'elev', 'height'],
-        'phase': ['phase', 'stage', 'section', 'area', 'zone']
-    }
-
-    file = st.file_uploader("Upload Baseline CSV", type=['csv'])
-    
-    if file and active_proj is not None:
-        df_base = pd.read_csv(file)
-        
-        # 1. Robust Header Mapping
-        rename_map = {}
-        for official_name, aliases in column_aliases.items():
-            for col in df_base.columns:
-                if col.lower().strip() in aliases:
-                    rename_map[col] = official_name
-                    break
-        
-        df_base = df_base.rename(columns=rename_map)
-        
-        # 2. Data Normalization & Defaulting
-        # Ensure Hole ID is a string and project ID is linked
-        df_base['hole_id'] = df_base['hole_id'].astype(str).str.strip()
-        df_base['project_id'] = str(active_proj['project_id'])
-        
-        # DEFAULT LOGIC: If 'phase' wasn't mapped, create it as 'Phase1'
-        if 'phase' not in df_base.columns:
-            df_base['phase'] = "Phase1"
-        else:
-            # If the column exists but some rows are empty, fill them
-            df_base['phase'] = df_base['phase'].fillna("Phase1").astype(str)
-
-        # Ensure Z exists
-        if 'design_z' not in df_base.columns:
-            df_base['design_z'] = 0.0
-
-        # 3. Final Column Selection for BigQuery
-        required = ['project_id', 'hole_id', 'design_n', 'design_e', 'design_z', 'phase']
-        
-        # Check if we have the absolute minimums to proceed
-        if 'design_n' in df_base.columns and 'design_e' in df_base.columns:
-            df_final = df_base[required].copy()
+    elif action == "Upload Baseline":
+        st.subheader("Step 2: Upload Design Baseline")
+        file = st.file_uploader("Upload Baseline CSV", type=['csv'])
+        if file and active_proj is not None:
+            df_base = pd.read_csv(file)
+            # Standardizing headers
+            df_base.columns = [c.lower().strip() for c in df_base.columns]
             
-            st.write("✅ Ready for upload. Review Phase assignments:")
-            st.dataframe(df_final[['hole_id', 'phase', 'design_n', 'design_e']].head())
-
-            if st.button("Confirm & Upload to BigQuery"):
-                with st.spinner("Writing to Database..."):
-                    try:
-                        upload_to_bq(df_final, "sensorpush-export.survey.holes")
-                        st.success(f"Successfully loaded {len(df_final)} holes.")
-                        st.rerun() # Refresh to update the Sidebar Phase filter
-                    except Exception as e:
-                        st.error(f"Database Error: {e}")
-        else:
-            st.error("Missing coordinate columns (North/East/X/Y).")
+            # Robust mapping
+            rename_map = {'id':'hole_id', 'name':'hole_id', 'hole':'hole_id', 'north':'design_n', 'east':'design_e', 'elev':'design_z', 'elevation':'design_z', 'cadx':'design_e', 'cady':'design_n'}
+            df_base = df_base.rename(columns=rename_map)
+            
+            # Defaults & Logic
+            df_base['hole_id'] = df_base['hole_id'].astype(str).str.strip()
+            df_base['project_id'] = str(active_proj['project_id'])
+            if 'phase' not in df_base.columns:
+                df_base['phase'] = "Phase1"
+            if 'design_z' not in df_base.columns:
+                df_base['design_z'] = 0.0
+                
+            st.dataframe(df_base.head())
+            if st.button("Confirm Upload"):
+                upload_to_bq(df_base[['project_id','hole_id','design_n','design_e','design_z','phase']], "sensorpush-export.survey.holes")
+                st.success("Baseline Uploaded!")
+                st.rerun()
 
 #### Update Top Survey ####
 
@@ -231,7 +191,7 @@ elif choice == "3. Upload Top Survey":
                         st.success(f"Successfully updated {len(df_top)} holes in seconds!")
             else:
                 st.error("Missing required columns (ID, North, East).")
-                
+             
 #### Upload Downhole ####
 
 elif choice == "4. Upload Downhole":
