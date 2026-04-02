@@ -261,50 +261,53 @@ if category == "Database Maintenance":
         dh_file = st.file_uploader("Upload Downhole CSV", type=['csv'])
         
         if dh_file and active_proj is not None:
-            # --- IMPROVED DATE PARSER ---
-            # Specifically looks for 2-18-26 and turns it into 2026-02-18
+            # --- 1. THE FOOLPROOF DATE PARSER ---
+            # Forces 2-18-26 into 2026-02-18
             def get_filename_date(name):
-                pattern = r'(\d{1,2})[.\-](\d{1,2})[.\-](\d{2,4})'
-                m = re.search(pattern, name)
-                if m:
-                    month, day, year = m.groups()
-                    full_yr = "20" + year if len(year) == 2 else year
-                    return f"{full_yr}-{month.zfill(2)}-{day.zfill(2)}"
+                match = re.search(r'(\d{1,2})[.\-](\d{1,2})[.\-](\d{2,4})', name)
+                if match:
+                    m, d, y = match.groups()
+                    year = f"20{y}" if len(y) == 2 else y
+                    return f"{year}-{m.zfill(2)}-{d.zfill(2)}"
                 return datetime.now().strftime('%Y-%m-%d')
 
             f_date = get_filename_date(dh_file.name)
             st.info(f"📅 Detected Survey Date: **{f_date}**")
             
-            # --- LOAD AND STANDARDIZE ---
-            raw_df = pd.read_csv(dh_file)
-            df_dh = harmonize_headers(raw_df)
+            # --- 2. LOAD WITHOUT HEADERS ---
+            # We skip the first row and manually assign names to columns by their order
+            raw_data = pd.read_csv(dh_file, header=0) 
             
-            # --- VALIDATION (Check for 'length' NOT 'depth') ---
-            req_cols = ['hole_id', 'length', 'azimuth', 'inclination']
-            missing = [c for c in req_cols if c not in df_dh.columns]
-            
-            if not missing:
-                df_dh['project_id'] = str(active_proj['project_id'])
-                df_dh['survey_date'] = f_date
+            # Create a clean dataframe by grabbing the exact column numbers
+            # Based on your CSV: 3=HoleID, 6=Azimuth, 7=Inclination, 8=Length
+            df_cleaned = pd.DataFrame()
+            try:
+                df_cleaned['hole_id'] = raw_data.iloc[:, 3].astype(str).str.strip()
+                df_cleaned['azimuth'] = pd.to_numeric(raw_data.iloc[:, 6], errors='coerce').fillna(0.0)
+                df_cleaned['inclination'] = pd.to_numeric(raw_data.iloc[:, 7], errors='coerce').fillna(0.0)
+                # We label it 'depth' here so the rest of the script (and BQ) is happy
+                df_cleaned['depth'] = pd.to_numeric(raw_data.iloc[:, 8], errors='coerce').fillna(0.0)
                 
-                st.write("### Data Preview")
-                st.dataframe(df_dh[req_cols].head())
+                df_cleaned['project_id'] = str(active_proj['project_id'])
+                df_cleaned['survey_date'] = f_date
+            except Exception as e:
+                st.error(f"Logic Error: Could not find data at expected positions. {e}")
+                st.stop()
 
-                if st.button("🚀 Upload to BigQuery"):
-                    with st.spinner("Mapping Length to Depth for BigQuery..."):
-                        try:
-                            # Final Translation: Change 'length' to 'depth' ONLY for the DB push
-                            upload_df = df_dh.copy().rename(columns={'length': 'depth'})
-                            
-                            # Match BigQuery Schema exactly
-                            final_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
-                            upload_to_bq(upload_df[final_cols], "sensorpush-export.survey.surveys")
-                            st.success(f"Success! Uploaded {len(df_dh)} points for {f_date}")
-                        except Exception as e:
-                            st.error(f"BigQuery Error: {e}")
-            else:
-                st.error(f"Mapping failed. Could not find: {missing}")
-                st.write("Headers found in your file:", list(raw_df.columns))
+            # --- 3. PREVIEW ---
+            st.write("### Data Preview (Positional Extraction)")
+            st.dataframe(df_cleaned[['hole_id', 'depth', 'azimuth', 'inclination']].head())
+
+            # --- 4. THE UPLOAD ---
+            if st.button("🚀 Upload to BigQuery"):
+                with st.spinner("Pushing to BigQuery..."):
+                    try:
+                        # Direct upload using the names BigQuery expects
+                        final_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
+                        upload_to_bq(df_cleaned[final_cols], "sensorpush-export.survey.surveys")
+                        st.success(f"Success! {len(df_cleaned)} rows uploaded.")
+                    except Exception as e:
+                        st.error(f"BigQuery Reject: {e}")
 
 # ==========================================
 # 5. VISUALIZATION (FULL ORIGINAL LOGIC)
