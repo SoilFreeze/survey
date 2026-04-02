@@ -2,34 +2,36 @@ import streamlit as st
 import pandas as pd
 from google.cloud import bigquery
 
-# Assuming 'client' and 'proj' are already defined from the previous step
-def upload_survey_data(uploaded_file, project_id):
-    """Processes CSV and uploads to BigQuery survey table."""
-    df = pd.read_csv(uploaded_file)
-    
-    # Standardize columns to match BigQuery schema
-    # Expecting: Hole_ID, Depth, Azimuth, Inclination
-    df.columns = [c.lower().strip() for c in df.columns]
-    
-    required = {'hole_id', 'depth', 'azimuth', 'inclination'}
-    if not required.issubset(df.columns):
-        st.error(f"Missing columns. CSV must have: {required}")
-        return
+# Navigation for your flow
+menu = ["Project Setup", "Upload Baseline", "Upload Top Survey", "Upload Downhole"]
+choice = st.sidebar.selectbox("Workflow Step", menu)
 
-    # Add metadata required by the database
-    df['project_id'] = project_id
-    df['survey_type'] = 'Pipe' # Defaulting to Pipe for this paired-down version
-    
-    # Push to BigQuery
-    job_config = bigquery.LoadJobConfig(write_disposition="WRITE_APPEND")
-    job = client.load_table_from_dataframe(
-        df, "sensorpush-export.survey.surveys", job_config=job_config
-    )
-    job.result() # Wait for table load to complete
-    st.success(f"Uploaded {len(df)} points to Project: {project_id}")
+# --- STEP 1: CREATE PROJECT ---
+if choice == "Project Setup":
+    st.header("Step 1: Create or Select Project")
+    with st.form("new_project"):
+        p_id = st.text_input("Project ID (e.g., SITE-2024)")
+        p_name = st.text_input("Project Name")
+        o_n = st.number_input("Origin Northing (for 0,0 shift)", format="%.3f")
+        o_e = st.number_input("Origin Easting (for 0,0 shift)", format="%.3f")
+        if st.form_submit_button("Save Project"):
+            # Insert into BQ 'projects' table
+            st.success(f"Project {p_name} created.")
 
-# UI for Upload
-with st.expander("📤 Upload New Survey Data"):
-    survey_file = st.file_uploader("Upload Downhole CSV", type=['csv'])
-    if survey_file and st.button("Confirm Upload to BigQuery"):
-        upload_survey_data(survey_file, proj['project_id'])
+# --- STEP 2: BASELINE ---
+elif choice == "Upload Baseline":
+    st.header("Step 2: Upload Design Baseline")
+    # CSV should have: hole_id, design_n, design_e, design_z
+    file = st.file_uploader("Upload Baseline CSV", type=['csv'])
+    if file:
+        df = pd.read_csv(file)
+        # Push to BQ 'holes' table
+
+# --- STEP 4: DOWNHOLE ---
+elif choice == "Upload Downhole":
+    st.header("Step 4: Upload Downhole Survey")
+    # CSV should have: hole_id, depth, azimuth, inclination
+    file = st.file_uploader("Upload Boretrak/Downhole CSV", type=['csv'])
+    if file:
+        # 1. Ask user which project this belongs to
+        # 2. Append to BQ 'surveys' table
