@@ -1,4 +1,8 @@
-otly.subplots import make_subplots
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots  # Ensure the 'p' is here!
 from google.cloud import bigquery
 from google.oauth2 import service_account
 import re
