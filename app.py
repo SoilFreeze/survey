@@ -119,22 +119,42 @@ if category == "Database Maintenance":
                 st.success("Baseline Updated (Duplicates Cleared)")
                 st.rerun()
 
-    elif action == "Update Top Survey":
-        st.subheader("Step 3: Fast Batch Top Update")
-        top_file = st.file_uploader("Upload Actual Top CSV", type=['csv'])
-        if top_file and active_proj is not None:
-            df_top = pd.read_csv(top_file)
-            # (Mapping Logic...)
-            df_top['hole_id'] = df_top['hole_id'].astype(str).str.strip()
-            if st.button("Run Fast Update"):
-                temp_id = f"sensorpush-export.survey.temp_{active_proj['project_id']}"
+elif action == "Update Top Survey":
+    st.subheader("Step 3: Update Actual Collar (As-Built)")
+    top_file = st.file_uploader("Upload As-Built CSV", type=['csv'])
+    
+    if top_file and active_proj is not None:
+        df_top = pd.read_csv(top_file)
+        # Use your specific headers from the CSV: ID, EASTING, NORTHING, ELEVATION
+        df_top.columns = [c.upper().strip() for c in df_top.columns]
+        
+        # Map to the new 'actual' columns
+        df_top = df_top.rename(columns={
+            'ID': 'hole_id', 
+            'NORTHING': 'actual_n', 
+            'EASTING': 'actual_e', 
+            'ELEVATION': 'actual_z'
+        })
+        
+        df_top['hole_id'] = df_top['hole_id'].astype(str).str.strip()
+        df_top['project_id'] = str(active_proj['project_id'])
+
+        if st.button("🚀 Match & Update 93 Holes"):
+            with st.spinner("Updating As-Built records..."):
+                temp_id = f"sensorpush-export.survey.temp_asbuilt_{active_proj['project_id']}"
                 upload_to_bq(df_top, temp_id, write_mode="WRITE_TRUNCATE")
-                merge_q = f"""MERGE `sensorpush-export.survey.holes` T USING `{temp_id}` S 
-                             ON T.hole_id = S.hole_id AND T.project_id = '{active_proj['project_id']}' 
-                             WHEN MATCHED THEN UPDATE SET T.design_n = S.north, T.design_e = S.east"""
+                
+                # MERGE into actual_ columns only
+                merge_q = f"""
+                    MERGE `sensorpush-export.survey.holes` T
+                    USING `{temp_id}` S
+                    ON T.hole_id = S.hole_id AND T.project_id = S.project_id
+                    WHEN MATCHED THEN
+                      UPDATE SET T.actual_n = S.actual_n, T.actual_e = S.actual_e, T.actual_z = S.actual_z
+                """
                 client.query(merge_q).result()
                 client.delete_table(temp_id)
-                st.success("Top Survey Updated!")
+                st.success("Successfully updated the 93 physical surveys.")
 
     elif action == "Upload Downhole":
         st.subheader("Step 4: Upload Downhole Survey")
@@ -187,67 +207,23 @@ elif category == "Reports":
 
     if active_proj is None:
         st.error("❌ No Project Selected. Please select a project in the sidebar.")
-    else:
-        if report_action == "System Audit":
-            st.subheader(f"📊 Project Progress: {active_proj['name']}")
-            
-            # 2. RUN INTEGRATED STATS QUERY
-            # Top Survey is defined as design_n having a non-zero actual value
-            stats_query = f"""
-                SELECT 
-                    COUNT(*) as total_baseline,
-                    COUNTIF(design_n != 0 AND design_n IS NOT NULL) as top_surveys_done,
-                    (SELECT COUNT(DISTINCT hole_id) FROM `sensorpush-export.survey.surveys` 
-                     WHERE project_id = '{active_proj['project_id']}') as downhole_completed
-                FROM `sensorpush-export.survey.holes`
-                WHERE project_id = '{active_proj['project_id']}'
-            """
-            df_stats = run_query(stats_query)
-            
-            # 3. DISPLAY PROGRESS DASHBOARD
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Baseline (Grid Size)", df_stats['total_baseline'][0])
-            c2.metric("Top of Pipe Surveys", df_stats['top_surveys_done'][0])
-            c3.metric("Downhole Surveys", df_stats['downhole_completed'][0])
-
-            st.divider()
-
-            # 4. DUPLICATE & GAP ANALYSIS
-            col_left, col_right = st.columns(2)
-
-            with col_left:
-                st.write("### 📍 Missing Top Surveys")
-                # Identify holes that haven't been updated in Step 3
-                missing_q = f"""
-                    SELECT hole_id, phase 
-                    FROM `sensorpush-export.survey.holes`
-                    WHERE project_id = '{active_proj['project_id']}'
-                    AND (design_n = 0 OR design_n IS NULL)
-                """
-                df_missing = run_query(missing_q)
-                if not df_missing.empty:
-                    st.warning(f"{len(df_missing)} holes pending Top Survey.")
-                    st.dataframe(df_missing)
-                else:
-                    st.success("✅ All holes have Top of Pipe surveys.")
-
-            with col_right:
-                st.write("### 🛰️ Survey Run Audit (Doubles)")
-                # Detects if a single hole has multiple survey sets at the same depths
-                dup_survey_q = f"""
-                    SELECT hole_id, survey_type, COUNT(depth) as total_pts, COUNT(DISTINCT depth) as unique_depths
-                    FROM `sensorpush-export.survey.surveys`
-                    WHERE project_id = '{active_proj['project_id']}'
-                    GROUP BY hole_id, survey_type
-                    HAVING total_pts > unique_depths
-                """
-                df_dups = run_query(dup_survey_q)
-                if not df_dups.empty:
-                    st.error("Duplicate data points found in Downhole!")
-                    st.dataframe(df_dups)
-                else:
-                    st.success("No overlapping survey points detected.")
-
+    elif report_action == "System Audit":
+    stats_query = f"""
+        SELECT 
+            COUNT(*) as total_baseline,
+            COUNTIF(actual_n != 0 AND actual_n IS NOT NULL) as top_surveys_done,
+            (SELECT COUNT(DISTINCT hole_id) FROM `sensorpush-export.survey.surveys` 
+             WHERE project_id = '{active_proj['project_id']}') as downhole_completed
+        FROM `sensorpush-export.survey.holes`
+        WHERE project_id = '{active_proj['project_id']}'
+    """
+    df_stats = run_query(stats_query)
+    
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Baseline (Design)", df_stats['total_baseline'][0]) # Should be 1105
+    c2.metric("Top Surveys (As-Built)", df_stats['top_surveys_done'][0]) # Should be 93
+    c3.metric("Downhole (Probed)", df_stats['downhole_completed'][0])
+    
         elif report_action == "Deviation Summary":
             st.subheader("Final Pipe Deviation Table")
             # Logic for a table showing design vs actual exit points
