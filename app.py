@@ -221,21 +221,22 @@ if category == "Database Maintenance":
         dh_file = st.file_uploader("Upload Downhole CSV", type=['csv'])
         
         if dh_file and active_proj is not None:
-            # 1. DATE DETECTION
+            # 1. DETECT DATE
             f_date = get_smart_date(dh_file.name)
             st.info(f"📅 Detected Survey Date: **{f_date}**")
             
-            # 2. LOAD & HARMONIZE
-            # We use the function already at the top of your file
+            # 2. LOAD & IMMEDIATELY HARMONIZE
+            # This uses the function at the top of your script to turn 'length' into 'length'
             raw_df = pd.read_csv(dh_file)
-            df_dh = standardize_survey_data(raw_df)
+            df_dh = harmonize_probe_data(raw_df)
             
-            # 3. RENAME FOR BIGQUERY
-            # Your function names it 'length', but BigQuery needs 'depth'
+            # 3. TRANSLATE TO DATABASE SCHEMA
+            # Your BigQuery table specifically needs 'depth'
             if 'length' in df_dh.columns:
                 df_dh = df_dh.rename(columns={'length': 'depth'})
 
             # 4. VALIDATION
+            # Now we check for 'depth' because we just created it above
             req_cols = ['hole_id', 'depth', 'azimuth', 'inclination']
             missing = [c for c in req_cols if c not in df_dh.columns]
             
@@ -244,22 +245,22 @@ if category == "Database Maintenance":
                 df_dh['project_id'] = str(active_proj['project_id'])
                 df_dh['survey_date'] = f_date
                 
-                st.success("✅ Successfully mapped columns (Found 'length' and converted to 'depth')")
+                st.success("✅ Success: 'length' column found and mapped to 'depth'.")
                 st.write("### Data Preview")
                 st.dataframe(df_dh[req_cols].head())
 
                 if st.button("🚀 Upload to BigQuery"):
                     with st.spinner("Pushing to BigQuery..."):
                         try:
-                            # Table Schema matches 'depth'
+                            # Match BigQuery Table Schema exactly
                             final_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
                             upload_to_bq(df_dh[final_cols], "sensorpush-export.survey.surveys")
                             st.success(f"Uploaded {len(df_dh)} points for {f_date}")
                         except Exception as e:
-                            st.error(f"BigQuery Error: {e}")
+                            st.error(f"BigQuery Reject: {e}")
             else:
-                st.error(f"Mapping failed. Missing: {missing}")
-                st.write("Headers found in your file:", list(raw_df.columns))
+                st.error(f"Mapping failed. Missing columns: {missing}")
+                st.write("Headers found in your CSV:", list(raw_df.columns))
 
 
 # ==========================================
