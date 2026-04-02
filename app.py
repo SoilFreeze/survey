@@ -30,31 +30,7 @@ def upload_to_bq(df, table_id, write_mode="WRITE_APPEND"):
     job = client.load_table_from_dataframe(df, table_id, job_config=job_config)
     return job.result()
     
-##### Function Junction #####
-def physically_rename_and_export(uploaded_file):
-    # 1. Open the CSV
-    df = pd.read_csv(uploaded_file)
-    
-    # 2. Create the physical rename map
-    rename_map = {}
-    for col in df.columns:
-        c_low = col.lower().strip()
-        # The specific "Length to Depth" fix
-        if 'length' in c_low:
-            rename_map[col] = 'depth'
-        elif 'hole' in c_low or 'pipe' in c_low:
-            rename_map[col] = 'hole_id'
-        elif 'azi' in c_low:
-            rename_map[col] = 'azimuth'
-        elif 'inc' in c_low:
-            rename_map[col] = 'inclination'
-            
-    # 3. Apply the rename physically to the dataframe
-    df_fixed = df.rename(columns=rename_map)
-    
-    # 4. Convert back to CSV string for the download button
-    return df_fixed, df_fixed.to_csv(index=False).encode('utf-8')
-    
+   
 # ==========================================
 # 2. MATH ENGINE (Standardized to 'length')
 # ==========================================
@@ -168,24 +144,6 @@ if category == "Database Maintenance":
         dh_file = st.file_uploader("Upload Downhole CSV", type=['csv'])
         
         if dh_file:
-            # 1. RUN THE PHYSICAL RENAME
-            df_processed, csv_data = physically_rename_and_export(dh_file)
-            
-            # 2. SAVE BACK TO COMPUTER
-            # Since I cannot force-save to your drive, this button allows you to 
-            # save the "Depth" version immediately.
-            new_filename = dh_file.name.replace(".csv", "_FIXED_DEPTH.csv")
-            st.download_button(
-                label="💾 Save Fixed CSV to Computer",
-                data=csv_data,
-                file_name=new_filename,
-                mime='text/csv',
-            )
-            
-            st.divider()
-            
-            # 3. PROCEED WITH REST OF CODE
-            # Now the "Internal" version is already named depth
             f_date = get_smart_date(dh_file.name)
             st.info(f"📅 Detected Survey Date: **{f_date}**")
             
