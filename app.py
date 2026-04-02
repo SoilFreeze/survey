@@ -22,7 +22,7 @@ def get_bq_client():
 
 client = get_bq_client()
 
-# Move this to the top of the file!
+# --- GLOBAL UTILITIES (Top of file) ---
 def get_smart_date(name):
     """Extracts date from filename in various formats."""
     pattern = r'(\d{1,4})[.\-](\d{1,2})[.\-](\d{2,4})'
@@ -175,25 +175,27 @@ if category == "Database Maintenance":
                 client.delete_table(temp_id)
                 st.success("Surface As-Builts updated.")
 
-    # --- STEP 4: UPLOAD DOWNHOLE ---
+    # --- STEP 4: UPLOAD DOWNHOLE (PROBE DATA) ---
     elif action == "Upload Downhole":
         st.subheader("Step 4: Upload Probe Data")
         dh_file = st.file_uploader("Upload Downhole CSV", type=['csv'])
         
         if dh_file and active_proj is not None:
-            # This will now work because get_smart_date is at the top of the file
+            # This call will now succeed because the function is at the top
             f_date = get_smart_date(dh_file.name)
             st.info(f"📅 Detected Survey Date: **{f_date}**")
             
+            # Load with BOM handling to prevent hidden character errors
             df_dh = pd.read_csv(dh_file, encoding='utf-8-sig')
             
+            # 3. BUILD THE TRANSLATION DICTIONARY
             mapping = {}
             for col in df_dh.columns:
                 c_low = col.lower().strip()
                 if any(kw in c_low for kw in ['hole', 'pipe']):
                     mapping[col] = 'hole_id'
                 elif any(kw in c_low for kw in ['length', 'depth', 'md']):
-                    mapping[col] = 'length'  # Renamed for your new standard
+                    mapping[col] = 'length'  # Renaming everything to length
                 elif 'azi' in c_low:
                     mapping[col] = 'azimuth'
                 elif 'inc' in c_low:
@@ -201,7 +203,7 @@ if category == "Database Maintenance":
 
             df_dh = df_dh.rename(columns=mapping)
 
-            # GATEKEEPER: Looking for 'length'
+            # 4. VALIDATION: Looking for 'length', NOT 'depth'
             req_cols = ['hole_id', 'length', 'azimuth', 'inclination']
             missing = [c for c in req_cols if c not in df_dh.columns]
             
@@ -209,7 +211,12 @@ if category == "Database Maintenance":
                 df_dh['project_id'] = str(active_proj['project_id'])
                 df_dh['survey_date'] = f_date
                 
+                # Cleanup Data Types
                 df_dh['length'] = pd.to_numeric(df_dh['length'], errors='coerce')
+                df_dh['azimuth'] = pd.to_numeric(df_dh['azimuth'], errors='coerce').fillna(0.0)
+                df_dh['inclination'] = pd.to_numeric(df_dh['inclination'], errors='coerce').fillna(0.0)
+                
+                # Drop rows where 'length' is missing (prevents BQ schema errors)
                 df_dh = df_dh.dropna(subset=['length', 'hole_id'])
 
                 st.write("### ✅ Mapping Success")
@@ -217,26 +224,15 @@ if category == "Database Maintenance":
 
                 if st.button("🚀 Upload to BigQuery"):
                     with st.spinner("Uploading..."):
-                        final_cols = ['project_id', 'hole_id', 'length', 'azimuth', 'inclination', 'survey_date']
-                        upload_to_bq(df_dh[final_cols], "sensorpush-export.survey.surveys")
-                        st.success(f"Uploaded {len(df_dh)} points.")
+                        try:
+                            final_cols = ['project_id', 'hole_id', 'length', 'azimuth', 'inclination', 'survey_date']
+                            upload_to_bq(df_dh[final_cols], "sensorpush-export.survey.surveys")
+                            st.success(f"Successfully uploaded {len(df_dh)} points.")
+                        except Exception as e:
+                            st.error(f"BigQuery Error: {e}")
             else:
-                st.error(f"CSV is missing columns: {', '.join(missing)}")
-
-    # (Other Database Maintenance sections like Project Setup remain as they were)
-    elif action == "Project Setup":
-        with st.form("new_proj_form"):
-            st.subheader("1. Setup New Project")
-            n_id = st.text_input("Project ID")
-            n_name = st.text_input("Project Name")
-            n_len = st.number_input("Standard Pipe Length (ft)", value=100.0)
-            n_on = st.number_input("Origin Northing")
-            n_oe = st.number_input("Origin Easting")
-            if st.form_submit_button("Save Project"):
-                df_new = pd.DataFrame([{'project_id':n_id, 'name':n_name, 'default_length':n_len, 'origin_north':n_on, 'origin_east':n_oe}])
-                upload_to_bq(df_new, "sensorpush-export.survey.projects")
-                st.success("Project Saved.")
-                st.rerun()
+                st.error(f"CSV is missing required columns: {', '.join(missing)}")
+                st.write("Found headers:", list(df_dh.columns))
                 
     # --- STEP 5: MANAGE DATA ---
     elif action == "Manage Data":
