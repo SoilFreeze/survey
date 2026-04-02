@@ -208,39 +208,89 @@ if category == "Database Maintenance":
 # ==========================================
 # 5. VISUALIZATION
 # ==========================================
-# ==========================================
-# 5. VISUALIZATION
-# ==========================================
 elif category == "Visualization":
-    view = st.radio("View", ["Whole Site Map", "Single Hole Analysis", "Elevation Slice"], horizontal=True)
+    view = st.radio("View Type", ["Whole Site Map", "Single Hole Analysis", "Elevation Slice"], horizontal=True)
     
-    # FIX: Use 'is not None' to avoid Pandas ambiguity
+    # CRITICAL: Use 'is not None' to avoid the ValueError from earlier
     if active_proj is not None:
-        q = f"""SELECT h.*, s.depth, s.azimuth, s.inclination FROM `sensorpush-export.survey.holes` h 
+        # Load joined data: Baseline Holes + any Survey depth data
+        q = f"""SELECT h.*, s.depth, s.azimuth, s.inclination 
+                FROM `sensorpush-export.survey.holes` h 
                 LEFT JOIN `sensorpush-export.survey.surveys` s ON h.hole_id = s.hole_id 
                 WHERE h.project_id = '{active_proj['project_id']}'"""
         df_viz = run_query(q)
+        
+        if active_phase != "All Phases":
+            df_viz = df_viz[df_viz['phase'] == active_phase]
 
-        if active_phase != "All Phases": df_viz = df_viz[df_viz['phase'] == active_phase]
-
-        if view == "Single Hole Analysis":
-            surveyed = df_viz.dropna(subset=['depth'])['hole_id'].unique()
-            target = st.selectbox("Select Hole", sorted(surveyed))
-            df_h = df_viz[df_viz['hole_id'] == target].copy()
-            s_n, s_e = df_h['design_n'].iloc[0] - active_proj['origin_north'], df_h['design_e'].iloc[0] - active_proj['origin_east']
-            processed = calculate_survey_path(df_h, s_n, s_e)
+        # --- VIEW 1: WHOLE SITE MAP (Surface Grid) ---
+        if view == "Whole Site Map":
+            st.subheader(f"Project Grid: {active_proj['name']}")
             
-            fig = make_subplots(rows=1, cols=2, subplot_titles=("East Dev", "North Dev"))
-            fig.add_trace(go.Scatter(x=processed['e_rel'], y=processed['depth'], name="East"), 1, 1)
-            fig.add_trace(go.Scatter(x=processed['n_rel'], y=processed['depth'], name="North"), 1, 2)
-            fig.update_yaxes(autorange="reversed")
+            # Shift coordinates to (0,0) relative to Project Origin
+            df_viz['n_rel'] = df_viz['design_n'] - active_proj['origin_north']
+            df_viz['e_rel'] = df_viz['design_e'] - active_proj['origin_east']
+            
+            fig = go.Figure()
+            # Plot the Design Grid
+            fig.add_trace(go.Scatter(
+                x=df_viz['e_rel'], y=df_viz['n_rel'],
+                mode='markers', name='Design',
+                marker=dict(color='lightgrey', size=5),
+                text=df_viz['hole_id']
+            ))
+            
+            # Highlight surveyed holes in green
+            surveyed = df_viz[df_viz['actual_n'].notnull()]
+            if not surveyed.empty:
+                surveyed['an_rel'] = surveyed['actual_n'] - active_proj['origin_north']
+                surveyed['ae_rel'] = surveyed['actual_e'] - active_proj['origin_east']
+                fig.add_trace(go.Scatter(
+                    x=surveyed['ae_rel'], y=surveyed['an_rel'],
+                    mode='markers', name='As-Built (Surveyed)',
+                    marker=dict(color='green', size=7),
+                    text=surveyed['hole_id']
+                ))
+
+            fig.update_layout(xaxis_title="East (ft)", yaxis_title="North (ft)", height=600)
             st.plotly_chart(fig, use_container_width=True)
 
-        elif view == "Elevation Slice":
-            target_z = st.number_input("Target Depth (ft)", value=50.0)
-            # Logic to interpolate and plot all pipes at this depth...
-            st.info("Mapping all pipes at specified elevation.")
+        # --- VIEW 2: SINGLE HOLE ANALYSIS (Deviation) ---
+        elif view == "Single Hole Analysis":
+            # Filter for holes that actually have downhole data
+            surveyed_ids = df_viz.dropna(subset=['depth'])['hole_id'].unique()
+            if len(surveyed_ids) > 0:
+                target = st.selectbox("Select Hole to Inspect", sorted(surveyed_ids))
+                df_h = df_viz[df_viz['hole_id'] == target].copy()
+                
+                # Anchor point: Use Actual survey if exists, otherwise Design
+                start_n = df_h['actual_n'].iloc[0] if pd.notnull(df_h['actual_n'].iloc[0]) else df_h['design_n'].iloc[0]
+                start_e = df_h['actual_e'].iloc[0] if pd.notnull(df_h['actual_e'].iloc[0]) else df_h['design_e'].iloc[0]
+                
+                # Shift anchor to (0,0)
+                s_n_rel = start_n - active_proj['origin_north']
+                s_e_rel = start_e - active_proj['origin_east']
+                
+                processed = calculate_survey_path(df_h, s_n_rel, s_e_rel)
+                
+                fig = make_subplots(rows=1, cols=2, subplot_titles=("East Deviation", "North Deviation"))
+                fig.add_trace(go.Scatter(x=processed['e_rel'], y=processed['depth'], name="East"), row=1, col=1)
+                fig.add_trace(go.Scatter(x=processed['n_rel'], y=processed['depth'], name="North"), row=1, col=2)
+                fig.update_yaxes(autorange="reversed", title="Depth (ft)")
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning("No downhole survey data found for this project yet.")
 
+        # --- VIEW 3: ELEVATION SLICE (The "Freeze Wall" View) ---
+        elif view == "Elevation Slice":
+            st.subheader("Subsurface Horizontal Slice")
+            slice_depth = st.slider("Select Target Depth (ft)", 0, 200, 50)
+            
+            st.info(f"Showing all surveyed pipes projected at {slice_depth}ft depth.")
+            # (Interpolation logic would go here to show where all 492 pipes are at exactly 50ft)
+
+    else:
+        st.error("Please select a project in the sidebar to view maps.")
 # ==========================================
 # 6. REPORTS (AUDIT & EXPORT)
 # ==========================================
