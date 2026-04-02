@@ -153,7 +153,7 @@ if category == "Database Maintenance":
                 df_processed['project_id'] = str(active_proj['project_id'])
                 df_processed['survey_date'] = f_date
                 
-                st.success("✅ Headers physically changed to 'depth' in memory.")
+                st.success("✅ Headers physically changed to 'length' in memory.")
                 st.write("### New File Preview")
                 st.dataframe(df_processed[req_cols].head())
 
@@ -174,7 +174,7 @@ if category == "Database Maintenance":
 elif category == "Visualization":
     view = st.radio("View Type", ["Whole Site Map", "Single Hole Analysis", "Elevation Slice"], horizontal=True)
     if active_proj is not None:
-        q = f"""SELECT h.*, s.depth as length, s.azimuth, s.inclination 
+        q = f"""SELECT h.*, s.length as length, s.azimuth, s.inclination 
                 FROM `sensorpush-export.survey.holes` h 
                 LEFT JOIN `sensorpush-export.survey.surveys` s ON h.hole_id = s.hole_id 
                 WHERE h.project_id = '{active_proj['project_id']}'"""
