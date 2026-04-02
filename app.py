@@ -74,6 +74,7 @@ category = st.sidebar.selectbox("Category", ["Database Maintenance", "Visualizat
 # 4. DATABASE MAINTENANCE
 # ==========================================
 if category == "Database Maintenance":
+    # This line MUST run first so 'action' is defined
     action = st.radio("Action", ["Project Setup", "Upload Baseline", "Update Top Survey", "Upload Downhole"], horizontal=True)
     
     if action == "Project Setup":
@@ -101,60 +102,41 @@ if category == "Database Maintenance":
         if file and active_proj is not None:
             df_base = pd.read_csv(file)
             df_base.columns = [c.lower().strip() for c in df_base.columns]
-            
-            rename_map = {'id':'hole_id', 'name':'hole_id', 'hole':'hole_id', 'north':'design_n', 'east':'design_e', 'elev':'design_z', 'elevation':'design_z', 'cadx':'design_e', 'cady':'design_n'}
-            df_base = df_base.rename(columns=rename_map)
-            
+            # Mapping and Defaults
             df_base['hole_id'] = df_base['hole_id'].astype(str).str.strip()
             df_base['project_id'] = str(active_proj['project_id'])
             if 'phase' not in df_base.columns: df_base['phase'] = "Phase1"
-            if 'design_z' not in df_base.columns: df_base['design_z'] = 0.0
-                
-            st.dataframe(df_base.head())
-            if st.button("Confirm & Overwrite Existing for Phase"):
-                # Clean Upgrade Logic
+            
+            if st.button("Confirm Baseline Upload"):
+                # Clean Upgrade logic to prevent duplicates
                 delete_q = f"DELETE FROM `sensorpush-export.survey.holes` WHERE project_id = '{active_proj['project_id']}' AND phase = '{df_base['phase'].iloc[0]}'"
                 client.query(delete_q).result()
-                upload_to_bq(df_base[['project_id','hole_id','design_n','design_e','design_z','phase']], "sensorpush-export.survey.holes")
-                st.success("Baseline Updated (Duplicates Cleared)")
-                st.rerun()
+                upload_to_bq(df_base, "sensorpush-export.survey.holes")
+                st.success("Baseline uploaded and old phase data cleared.")
 
-elif action == "Update Top Survey":
-    st.subheader("Step 3: Update Actual Collar (As-Built)")
-    top_file = st.file_uploader("Upload As-Built CSV", type=['csv'])
-    
-    if top_file and active_proj is not None:
-        df_top = pd.read_csv(top_file)
-        # Use your specific headers from the CSV: ID, EASTING, NORTHING, ELEVATION
-        df_top.columns = [c.upper().strip() for c in df_top.columns]
-        
-        # Map to the new 'actual' columns
-        df_top = df_top.rename(columns={
-            'ID': 'hole_id', 
-            'NORTHING': 'actual_n', 
-            'EASTING': 'actual_e', 
-            'ELEVATION': 'actual_z'
-        })
-        
-        df_top['hole_id'] = df_top['hole_id'].astype(str).str.strip()
-        df_top['project_id'] = str(active_proj['project_id'])
+    elif action == "Update Top Survey":
+        st.subheader("Step 3: Update Actual Collar (As-Built)")
+        # This now handles your 93-hole survey file
+        top_file = st.file_uploader("Upload As-Built CSV", type=['csv'])
+        if top_file and active_proj is not None:
+            df_top = pd.read_csv(top_file)
+            df_top.columns = [c.upper().strip() for c in df_top.columns]
+            df_top = df_top.rename(columns={'ID': 'hole_id', 'NORTHING': 'actual_n', 'EASTING': 'actual_e', 'ELEVATION': 'actual_z'})
+            df_top['hole_id'] = df_top['hole_id'].astype(str).str.strip()
+            df_top['project_id'] = str(active_proj['project_id'])
 
-        if st.button("🚀 Match & Update 93 Holes"):
-            with st.spinner("Updating As-Built records..."):
-                temp_id = f"sensorpush-export.survey.temp_asbuilt_{active_proj['project_id']}"
+            if st.button("🚀 Run As-Built Update"):
+                temp_id = f"sensorpush-export.survey.temp_top_{active_proj['project_id']}"
                 upload_to_bq(df_top, temp_id, write_mode="WRITE_TRUNCATE")
-                
-                # MERGE into actual_ columns only
+                # Update 'actual' columns only to keep design 1105 grid intact
                 merge_q = f"""
-                    MERGE `sensorpush-export.survey.holes` T
-                    USING `{temp_id}` S
+                    MERGE `sensorpush-export.survey.holes` T USING `{temp_id}` S
                     ON T.hole_id = S.hole_id AND T.project_id = S.project_id
-                    WHEN MATCHED THEN
-                      UPDATE SET T.actual_n = S.actual_n, T.actual_e = S.actual_e, T.actual_z = S.actual_z
+                    WHEN MATCHED THEN UPDATE SET T.actual_n = S.actual_n, T.actual_e = S.actual_e, T.actual_z = S.actual_z
                 """
                 client.query(merge_q).result()
                 client.delete_table(temp_id)
-                st.success("Successfully updated the 93 physical surveys.")
+                st.success("Updated Top Survey coordinates for matching holes.")
 
     elif action == "Upload Downhole":
         st.subheader("Step 4: Upload Downhole Survey")
