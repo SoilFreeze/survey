@@ -159,7 +159,7 @@ if category == "Database Maintenance":
 
                 if st.button("🚀 Upload to BigQuery"):
                     try:
-                        final_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
+                        final_cols = ['project_id', 'hole_id', 'length', 'azimuth', 'inclination', 'survey_date']
                         upload_to_bq(df_processed[final_cols], "sensorpush-export.survey.surveys")
                         st.success("BigQuery Upload Successful.")
                     except Exception as e:
