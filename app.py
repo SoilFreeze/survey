@@ -107,73 +107,68 @@ if category == "Database Maintenance":
 
     # --- STEP 2: UPLOAD BASELINE (PREVENTS DOUBLES) ---
     if action == "Upload Baseline":
-        st.subheader("Step 2: Upload Design Baseline")
-        file = st.file_uploader("Upload CSV", type=['csv'])
+    st.subheader("Step 2: Upload Design Baseline")
+    file = st.file_uploader("Upload CSV", type=['csv'])
+    
+    if file and active_proj is not None:
+        df_base = pd.read_csv(file)
+        # Normalize headers
+        df_base.columns = [c.lower().strip() for c in df_base.columns]
         
-        if file and active_proj is not None:
-            df_base = pd.read_csv(file)
-            # Standardize headers to lowercase for easy matching
-            df_base.columns = [c.lower().strip() for c in df_base.columns]
-            
-            # 1. EXPANDED MAPPING
-            # Added 'pipe' to the hole_id mapping
-            rename_map = {
-                'pipe':'hole_id', 'id':'hole_id', 'name':'hole_id', 'hole':'hole_id', 'hole id':'hole_id',
-                'north':'design_n', 'northing':'design_n', 'y':'design_n',
-                'east':'design_e', 'easting':'design_e', 'x':'design_e',
-                'elev':'design_z', 'elevation':'design_z', 'z':'design_z',
-                'inc':'design_inc', 'inclination':'design_inc',
-                'az':'design_az', 'azimuth':'design_az',
-                'len':'design_length', 'length':'design_length',
-                'type': 'pipe_type', 'kind': 'pipe_type'
-            }
-            df_base = df_base.rename(columns=rename_map)
-            
-            # 2. FORCE COMPLETE SCHEMA
-            # We create a dictionary of every column the DB expects.
-            # If it's not in the CSV, we use a sensible default.
-            db_schema = {
-                'project_id': str(active_proj['project_id']),
-                'hole_id': None, # Critical
-                'design_n': 0.0,
-                'design_e': 0.0,
-                'design_z': 0.0,
-                'phase': "Phase1",
-                'pipe_type': "Freeze Pipe",
-                'design_inc': 0.0,
-                'design_az': 0.0,
-                'design_length': active_proj.get('default_length', 100.0)
-            }
+        # 1. MAP ID COLUMN
+        rename_map = {
+            'pipe':'hole_id', 'id':'hole_id', 'name':'hole_id', 'hole':'hole_id'
+        }
+        df_base = df_base.rename(columns=rename_map)
+        
+        # 2. THE FIX: REMOVE NULLS & EMPTY ROWS
+        # This removes any rows where 'pipe' is blank
+        df_base = df_base.dropna(subset=['hole_id'])
+        # Also remove rows that are entirely empty
+        df_base = df_base[df_base['hole_id'].astype(str).str.strip() != ""]
 
-            for col, default in db_schema.items():
-                if col not in df_base.columns:
-                    df_base[col] = default
-            
-            # 3. VALIDATION & PREVIEW
-            if df_base['hole_id'].isnull().all():
-                st.error("❌ Could not find the pipe names. Found columns: " + str(list(df_base.columns)))
-            else:
-                st.success(f"✅ Recognized {len(df_base)} pipes. Ready to upload.")
-                st.dataframe(df_base[['hole_id', 'pipe_type', 'design_n', 'design_e']].head())
+        # 3. FORCE COMPLETE SCHEMA
+        db_schema = {
+            'project_id': str(active_proj['project_id']),
+            'hole_id': None,
+            'design_n': 0.0,
+            'design_e': 0.0,
+            'design_z': 0.0,
+            'phase': "Phase1",
+            'pipe_type': "Freeze Pipe",
+            'design_inc': 0.0,
+            'design_az': 0.0,
+            'design_length': active_proj.get('default_length', 100.0)
+        }
 
-                if st.button("🚀 Confirm & Overwrite Phase"):
-                    with st.spinner("Processing 1,105-hole grid..."):
-                        p_id = str(active_proj['project_id'])
-                        phase_name = df_base['phase'].iloc[0]
-                        
-                        # Clear old data for this project phase
-                        client.query(f"DELETE FROM `sensorpush-export.survey.holes` WHERE project_id = '{p_id}' AND phase = '{phase_name}'").result()
-                        
-                        # Re-order columns exactly as BigQuery expects
-                        final_df = df_base[list(db_schema.keys())]
-                        
-                        try:
-                            upload_to_bq(final_df, "sensorpush-export.survey.holes")
-                            st.success(f"Baseline for {phase_name} updated.")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Upload failed. Technical details: {e}")
+        for col, default in db_schema.items():
+            if col not in df_base.columns:
+                df_base[col] = default
+        
+        # 4. VALIDATION
+        if df_base.empty:
+            st.error("❌ The CSV appears to be empty or missing Pipe IDs.")
+        else:
+            st.success(f"✅ Found {len(df_base)} valid pipes (Filtered out nulls).")
+            st.dataframe(df_base[['hole_id', 'design_n', 'design_e']].head())
 
+            if st.button("🚀 Confirm & Overwrite Phase"):
+                with st.spinner(f"Cleaning and uploading {len(df_base)} pipes..."):
+                    p_id = str(active_proj['project_id'])
+                    phase_name = df_base['phase'].iloc[0]
+                    
+                    # Wipe only the matching project/phase records
+                    client.query(f"DELETE FROM `sensorpush-export.survey.holes` WHERE project_id = '{p_id}' AND phase = '{phase_name}'").result()
+                    
+                    # Ensure strict column order
+                    final_df = df_base[list(db_schema.keys())]
+                    
+                    try:
+                        upload_to_bq(final_df, "sensorpush-export.survey.holes")
+                        st.success(f"Successfully uploaded {len(final_df)} pipes to the grid.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Upload failed: {e}")
     # --- STEP 3: UPDATE TOP SURVEY (AS-BUILT) ---
     elif action == "Update Top Survey":
         st.subheader("Step 3: Update Actual Collar (As-Built)")
