@@ -186,56 +186,54 @@ if category == "Database Maintenance":
             df_dh = pd.read_csv(dh_file, encoding='utf-8-sig')
             
             # 3. CONSOLIDATED MAPPING (The Fix)
-            # This creates a 'translation' guide for the columns
+            # We build a 'translation guide' first
             mapping = {}
             for col in df_dh.columns:
                 c_low = col.lower().strip()
                 
-                # If it looks like Hole/Pipe -> hole_id
+                # If the column name contains these keywords, map them to the DB standard
                 if any(x in c_low for x in ['hole', 'pipe', 'id']):
                     mapping[col] = 'hole_id'
-                # If it looks like Length/Depth -> depth
                 elif any(x in c_low for x in ['length', 'depth', 'md']):
                     mapping[col] = 'depth'
-                # If it looks like Azimuth -> azimuth
-                elif 'azi' in c_low:
+                elif 'azimuth' in c_low or 'azi' in c_low:
                     mapping[col] = 'azimuth'
-                # If it looks like Inclination -> inclination
-                elif 'inc' in c_low:
+                elif 'inclination' in c_low or 'inc' in c_low:
                     mapping[col] = 'inclination'
 
-            # Apply all renames at once
+            # Apply all renames at once in a single step
             df_dh = df_dh.rename(columns=mapping)
 
             # 4. VALIDATION
             req_cols = ['hole_id', 'depth', 'azimuth', 'inclination']
+            # We check if the renamed dataframe has the 4 required columns
             missing = [c for c in req_cols if c not in df_dh.columns]
             
             if not missing:
                 df_dh['project_id'] = str(active_proj['project_id'])
                 df_dh['survey_date'] = f_date
                 
-                # Cleanup data types
+                # Cleanup data types for BigQuery
                 df_dh['hole_id'] = df_dh['hole_id'].astype(str).str.strip()
                 df_dh['depth'] = pd.to_numeric(df_dh['depth'], errors='coerce')
                 df_dh['azimuth'] = pd.to_numeric(df_dh['azimuth'], errors='coerce').fillna(0.0)
                 df_dh['inclination'] = pd.to_numeric(df_dh['inclination'], errors='coerce').fillna(0.0)
                 
-                # Remove rows where depth couldn't be converted to a number
-                df_dh = df_dh.dropna(subset=['depth'])
+                # Drop footer/junk rows where depth isn't a number
+                df_dh = df_dh.dropna(subset=['depth', 'hole_id'])
 
-                st.write("### Data Preview")
+                st.write("### ✅ Mapping Success")
                 st.dataframe(df_dh[req_cols].head())
 
                 if st.button("🚀 Upload to BigQuery"):
-                    with st.spinner("Uploading..."):
-                        upload_to_bq(df_dh[req_cols + ['project_id', 'survey_date']], "sensorpush-export.survey.surveys")
-                        st.success(f"Success! Uploaded {len(df_dh)} points.")
+                    with st.spinner("Uploading to BigQuery..."):
+                        final_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
+                        upload_to_bq(df_dh[final_cols], "sensorpush-export.survey.surveys")
+                        st.success(f"Successfully uploaded {len(df_dh)} points for {f_date}")
             else:
-                # This helps you see why it failed
                 st.error(f"CSV is missing columns: {', '.join(missing)}")
-                st.write("Current Columns in App Memory:", list(df_dh.columns))
-                st.write("Mapping Dictionary used:", mapping)
+                st.write("Current Columns in Memory:", list(df_dh.columns))
+                st.write("The app was looking for 'depth' but found 'length'. Check the mapping logic above.")
                 
     # --- STEP 5: MANAGE DATA ---
     elif action == "Manage Data":
