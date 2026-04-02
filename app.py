@@ -179,7 +179,7 @@ if category == "Database Maintenance":
             # This turns 'length' into 'depth' and 'hole' into 'hole_id'
             dh_map = {
                 'hole': 'hole_id', 
-                'length': 'depth', 
+                'Length': 'depth', 
                 'azimuth': 'azimuth', 
                 'inclination': 'inclination'
             }
