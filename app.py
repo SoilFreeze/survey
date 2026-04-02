@@ -147,7 +147,7 @@ if category == "Database Maintenance":
             f_date = get_smart_date(dh_file.name)
             st.info(f"📅 Detected Survey Date: **{f_date}**")
             
-            req_cols = ['hole_id', 'depth', 'azimuth', 'inclination']
+            req_cols = ['hole_id', 'length', 'azimuth', 'inclination']
             if all(c in df_processed.columns for c in req_cols):
                 # Metadata
                 df_processed['project_id'] = str(active_proj['project_id'])
