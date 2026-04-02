@@ -4,6 +4,7 @@ import numpy as np
 import plotly.graph_objects as go
 from google.cloud import bigquery
 from google.oauth2 import service_account
+from plotly.subplots import make_subplots
 
 # ==========================================
 # 1. AUTHENTICATION BLOCK
