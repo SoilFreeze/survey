@@ -193,36 +193,31 @@ elif category == "Reports":
         if report_action == "System Audit":
             st.subheader(f"📊 Project Progress: {active_proj['name']}")
             
-            # 2. RUN INTEGRATED STATS QUERY
-            # 'top_surveys_done' now specifically counts the 'actual_n' column
-            stats_query = f"""
-                SELECT 
-                    COUNT(*) as total_baseline,
-                    COUNTIF(actual_n != 0 AND actual_n IS NOT NULL) as top_surveys_done,
-                    (SELECT COUNT(DISTINCT hole_id) FROM `sensorpush-export.survey.surveys` 
-                     WHERE project_id = '{active_proj['project_id']}') as downhole_completed
-                FROM `sensorpush-export.survey.holes`
-                WHERE project_id = '{active_proj['project_id']}'
-            """
-            df_stats = run_query(stats_query)
-            
-            # 3. DISPLAY PROGRESS DASHBOARD
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Baseline (Design Grid)", df_stats['total_baseline'][0]) # Should be 1105
-            c2.metric("Top Surveys (As-Built)", df_stats['top_surveys_done'][0]) # Should be 93
-            c3.metric("Downhole (Probed)", df_stats['downhole_completed'][0])
-
-            st.divider()
-
-            # 4. GAP ANALYSIS: IDENTIFY HOLES WITHOUT AS-BUILTS
-            col_left, col_right = st.columns(2)
-
-            with col_left:
-                st.write("### 📍 Missing Top Surveys")
-                # Lists holes that have design coordinates but no 'actual' survey yet
-                missing_q = f"""
-                    SELECT hole_id, phase 
+            try:
+                # Optimized query to count your 1,105 baseline vs 93 as-builts
+                stats_query = f"""
+                    SELECT 
+                        COUNT(*) as total_baseline,
+                        COUNTIF(actual_n != 0 AND actual_n IS NOT NULL) as top_surveys_done,
+                        (SELECT COUNT(DISTINCT hole_id) FROM `sensorpush-export.survey.surveys` 
+                         WHERE project_id = '{active_proj['project_id']}') as downhole_completed
                     FROM `sensorpush-export.survey.holes`
+                    WHERE project_id = '{active_proj['project_id']}'
+                """
+                df_stats = run_query(stats_query)
+                
+                # Display Metrics
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Baseline (Design Grid)", df_stats['total_baseline'][0]) 
+                c2.metric("Top Surveys (As-Built)", df_stats['top_surveys_done'][0]) 
+                c3.metric("Downhole (Probed)", df_stats['downhole_completed'][0])
+
+                st.divider()
+
+                # List missing as-builts to help reconcile the 1,105 grid
+                st.write("### 📍 Pending As-Built Surveys")
+                missing_q = f"""
+                    SELECT hole_id, phase FROM `sensorpush-export.survey.holes`
                     WHERE project_id = '{active_proj['project_id']}'
                     AND (actual_n = 0 OR actual_n IS NULL)
                 """
@@ -231,25 +226,14 @@ elif category == "Reports":
                     st.warning(f"{len(df_missing)} holes are missing As-Built coordinates.")
                     st.dataframe(df_missing)
                 else:
-                    st.success("✅ All 1,105 holes have been surveyed at the surface.")
+                    st.success("✅ All holes reconciled with As-Built data.")
 
-            with col_right:
-                st.write("### 🛰️ Survey Run Audit (Doubles)")
-                # Detects if any hole has multiple sets of data for the same depth
-                dup_survey_q = f"""
-                    SELECT hole_id, survey_type, COUNT(depth) as pts, COUNT(DISTINCT depth) as unique_depths
-                    FROM `sensorpush-export.survey.surveys`
-                    WHERE project_id = '{active_proj['project_id']}'
-                    GROUP BY hole_id, survey_type
-                    HAVING pts > unique_depths
-                """
-                df_dups = run_query(dup_survey_q)
-                if not df_dups.empty:
-                    st.error("Duplicate data points detected in Downhole surveys!")
-                    st.dataframe(df_dups)
-                else:
-                    st.success("No overlapping survey points detected.")
-
+            except Exception as e:
+                st.error("⚠️ Database Schema Mismatch")
+                st.info("Please ensure you have run the 'ALTER TABLE' command in BigQuery to add 'actual_n'.")
+                st.expander("Technical Error Details").write(e)
+                
+                
         elif report_action == "Deviation Summary":
             st.subheader("Design vs. Actual Deviation")
             st.info("This report will compare your million-value Northings to calculate drift.")
