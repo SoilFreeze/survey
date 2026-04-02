@@ -91,6 +91,7 @@ if category == "Database Maintenance":
             n_len = st.number_input("Standard Pipe Length (ft)", value=100.0)
             n_on = st.number_input("Origin Northing (Project 0,0)", format="%.3f")
             n_oe = st.number_input("Origin Easting (Project 0,0)", format="%.3f")
+            n_type = st.selectbox("Default Pipe Type", ["Freeze Pipe", "Battered Freeze Pipe", "Temperature Pipe"])
             
             if st.form_submit_button("Save Project"):
                 new_df = pd.DataFrame([{
@@ -107,38 +108,45 @@ if category == "Database Maintenance":
     # --- STEP 2: UPLOAD BASELINE (PREVENTS DOUBLES) ---
     elif action == "Upload Baseline":
         st.subheader("Step 2: Upload Design Baseline")
-        st.info("Note: Uploading will replace the baseline for the selected Phase.")
+        st.info("Uploading will overwrite the baseline for the selected Project and Phase.")
         file = st.file_uploader("Upload CSV", type=['csv'])
         
         if file and active_proj is not None:
             df_base = pd.read_csv(file)
             df_base.columns = [c.lower().strip() for c in df_base.columns]
             
-            # Mapping for Battered and Standard pipes
+            # Comprehensive mapping for all pipe parameters
             rename_map = {
                 'id':'hole_id', 'name':'hole_id', 'hole':'hole_id',
                 'north':'design_n', 'east':'design_e', 'elev':'design_z',
-                'inc':'design_inc', 'az':'design_az', 'length':'design_length'
+                'inc':'design_inc', 'az':'design_az', 'length':'design_length',
+                'type': 'pipe_type', 'kind': 'pipe_type', 'category': 'pipe_type'
             }
             df_base = df_base.rename(columns=rename_map)
             df_base['project_id'] = str(active_proj['project_id'])
             
-            # Fill missing logic
+            # --- Defaults Logic ---
             if 'phase' not in df_base.columns: df_base['phase'] = "Phase1"
+            if 'pipe_type' not in df_base.columns: df_base['pipe_type'] = "Freeze Pipe"
             if 'design_length' not in df_base.columns: df_base['design_length'] = active_proj['default_length']
             if 'design_inc' not in df_base.columns: df_base['design_inc'] = 0.0
             if 'design_az' not in df_base.columns: df_base['design_az'] = 0.0
+            
+            # Clean up Type strings for consistency
+            df_base['pipe_type'] = df_base['pipe_type'].fillna("Freeze Pipe").astype(str)
 
-            st.dataframe(df_base.head())
+            st.write("### Previewing Upload Data")
+            st.dataframe(df_base[['hole_id', 'pipe_type', 'design_n', 'design_e', 'phase']].head())
 
             if st.button("🚀 Confirm & Overwrite Phase"):
-                with st.spinner("Wiping old phase data and updating baseline..."):
+                with st.spinner("Wiping old records and updating baseline..."):
                     # Wipe duplicates for this project/phase combo
                     del_q = f"DELETE FROM `sensorpush-export.survey.holes` WHERE project_id = '{active_proj['project_id']}' AND phase = '{df_base['phase'].iloc[0]}'"
                     client.query(del_q).result()
                     
                     upload_to_bq(df_base, "sensorpush-export.survey.holes")
-                    st.success(f"Baseline for {df_base['phase'].iloc[0]} updated.")
+                    st.success(f"Baseline for {df_base['phase'].iloc[0]} updated successfully.")
+                    st.rerun()
 
     # --- STEP 3: UPDATE TOP SURVEY (AS-BUILT) ---
     elif action == "Update Top Survey":
@@ -235,7 +243,7 @@ elif category == "Visualization":
     view = st.radio("View Type", ["Whole Site Map", "Single Hole Analysis", "Elevation Slice"], horizontal=True)
     
     if active_proj is not None:
-        # Fetching Baseline + Survey Status
+        # Fetch joined data
         q = f"""SELECT h.*, s.depth, s.azimuth, s.inclination 
                 FROM `sensorpush-export.survey.holes` h 
                 LEFT JOIN `sensorpush-export.survey.surveys` s ON h.hole_id = s.hole_id 
@@ -245,63 +253,54 @@ elif category == "Visualization":
         if active_phase != "All Phases":
             df_viz = df_viz[df_viz['phase'] == active_phase]
 
-        # --- VIEW 1: WHOLE SITE MAP (Surface Grid) ---
         if view == "Whole Site Map":
-            st.subheader(f"Project Layout: {active_proj['name']}")
+            st.subheader(f"Project Grid: {active_proj['name']}")
             
-            # Shift to (0,0) relative to Project Origin
+            # Prepare relative coordinates
             df_viz['n_rel'] = df_viz['design_n'] - active_proj['origin_north']
             df_viz['e_rel'] = df_viz['design_e'] - active_proj['origin_east']
-            
-            # Identify Status Flags
             df_viz['has_top'] = df_viz['actual_n'].notnull() & (df_viz['actual_n'] != 0)
             df_viz['has_downhole'] = df_viz['depth'].notnull()
             
             fig = go.Figure()
 
-            # LAYER A: BATTER INDICATORS (Red "Tails" for angled pipes)
-            # Filters for unique holes to avoid drawing multiple tails for same ID
+            # 1. Battered Pipe Indicators (Red tails showing lean direction)
             battered = df_viz[df_viz['design_inc'] > 0].drop_duplicates('hole_id')
             for _, row in battered.iterrows():
                 rad_az = np.radians(row['design_az'])
-                # Draw a 5ft visual "lean" indicator
-                dn = 5 * np.cos(rad_az)
-                de = 5 * np.sin(rad_az)
-                fig.add_trace(go.Scatter(
-                    x=[row['e_rel'], row['e_rel'] + de],
-                    y=[row['n_rel'], row['n_rel'] + dn],
-                    mode='lines',
-                    line=dict(color='red', width=1),
-                    showlegend=False,
-                    hoverinfo='skip'
-                ))
+                dn, de = 5 * np.cos(rad_az), 5 * np.sin(rad_az) # 5ft indicator
+                fig.add_trace(go.Scatter(x=[row['e_rel'], row['e_rel']+de], y=[row['n_rel'], row['n_rel']+dn], mode='lines', line=dict(color='red', width=1), showlegend=False, hoverinfo='skip'))
 
-            # LAYER B: OUTER RING (Collar As-Built Status)
-            for status, color in [(False, 'lightgrey'), (True, 'black')]:
-                mask = df_viz['has_top'] == status
-                fig.add_trace(go.Scatter(
-                    x=df_viz.loc[mask, 'e_rel'], y=df_viz.loc[mask, 'n_rel'],
-                    mode='markers', name=f"{'Actual' if status else 'Design'} Top",
-                    marker=dict(symbol='circle-open', color=color, size=12, line=dict(width=2)),
-                    text=df_viz.loc[mask, 'hole_id']
-                ))
+            # 2. Status Symbology (Outer Ring = Top Survey, Inner Dot = Downhole)
+            # Squares for Temperature Pipes, Circles for Freeze Pipes
+            for p_type, shape in [("Freeze Pipe", "circle"), ("Battered Freeze Pipe", "circle"), ("Temperature Pipe", "square")]:
+                type_mask = df_viz['pipe_type'] == p_type
+                if type_mask.any():
+                    # Outer Ring (Top Survey Status)
+                    for status, color in [(False, 'lightgrey'), (True, 'black')]:
+                        mask = type_mask & (df_viz['has_top'] == status)
+                        fig.add_trace(go.Scatter(
+                            x=df_viz.loc[mask, 'e_rel'], y=df_viz.loc[mask, 'n_rel'],
+                            mode='markers', name=f"{p_type} ({'As-Built' if status else 'Design'})",
+                            marker=dict(symbol=f"{shape}-open", color=color, size=14, line=dict(width=2.5)),
+                            text=df_viz.loc[mask, 'hole_id']
+                        ))
+                    
+                    # Inner Center (Downhole Status)
+                    for status, color in [(False, 'lightgrey'), (True, 'black')]:
+                        mask_dh = type_mask & (df_viz['has_downhole'] == status)
+                        fig.add_trace(go.Scatter(
+                            x=df_viz.loc[mask_dh, 'e_rel'], y=df_viz.loc[mask_dh, 'n_rel'],
+                            mode='markers', showlegend=False,
+                            marker=dict(symbol=shape, color=color, size=6),
+                            text=df_viz.loc[mask_dh, 'hole_id']
+                        ))
 
-            # LAYER C: INNER DOT (Downhole Probe Status)
-            for status, color in [(False, 'lightgrey'), (True, 'black')]:
-                mask_dh = df_viz['has_downhole'] == status
-                fig.add_trace(go.Scatter(
-                    x=df_viz.loc[mask_dh, 'e_rel'], y=df_viz.loc[mask_dh, 'n_rel'],
-                    mode='markers', name=f"{'Probed' if status else 'Pending'} DH",
-                    marker=dict(symbol='circle', color=color, size=5),
-                    text=df_viz.loc[mask_dh, 'hole_id']
-                ))
-
-            # FORCE EVEN SCALE (1:1 Aspect Ratio)
+            # Force Even Scale (1:1 Aspect Ratio)
             fig.update_layout(
                 xaxis=dict(title="East (ft)", scaleanchor="y", scaleratio=1),
                 yaxis=dict(title="North (ft)"),
-                height=850,
-                template="plotly_white",
+                height=850, template="plotly_white",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
             )
             st.plotly_chart(fig, use_container_width=True)
