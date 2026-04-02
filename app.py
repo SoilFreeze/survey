@@ -106,46 +106,62 @@ if category == "Database Maintenance":
                 st.rerun()
 
     # --- STEP 2: UPLOAD BASELINE (PREVENTS DOUBLES) ---
-    elif action == "Upload Baseline":
+elif action == "Upload Baseline":
         st.subheader("Step 2: Upload Design Baseline")
         st.info("Uploading will overwrite the baseline for the selected Project and Phase.")
         file = st.file_uploader("Upload CSV", type=['csv'])
         
         if file and active_proj is not None:
+            # 1. LOAD & NORMALIZE HEADERS
             df_base = pd.read_csv(file)
             df_base.columns = [c.lower().strip() for c in df_base.columns]
             
-            # Comprehensive mapping for all pipe parameters
+            # 2. FLEXIBLE MAPPING
+            # Add any variation of names found in your CSVs here
             rename_map = {
-                'id':'hole_id', 'name':'hole_id', 'hole':'hole_id',
-                'north':'design_n', 'east':'design_e', 'elev':'design_z',
-                'inc':'design_inc', 'az':'design_az', 'length':'design_length',
-                'type': 'pipe_type', 'kind': 'pipe_type', 'category': 'pipe_type'
+                'id':'hole_id', 'name':'hole_id', 'hole':'hole_id', 'hole id':'hole_id',
+                'north':'design_n', 'northing':'design_n', 'y':'design_n',
+                'east':'design_e', 'easting':'design_e', 'x':'design_e',
+                'elev':'design_z', 'elevation':'design_z', 'z':'design_z',
+                'inc':'design_inc', 'inclination':'design_inc',
+                'az':'design_az', 'azimuth':'design_az',
+                'len':'design_length', 'length':'design_length',
+                'type': 'pipe_type', 'kind': 'pipe_type', 'class': 'pipe_type'
             }
             df_base = df_base.rename(columns=rename_map)
-            df_base['project_id'] = str(active_proj['project_id'])
             
-            # --- Defaults Logic ---
+            # 3. FILL MISSING COLUMNS (The Safety Net)
+            if 'project_id' not in df_base.columns: df_base['project_id'] = str(active_proj['project_id'])
             if 'phase' not in df_base.columns: df_base['phase'] = "Phase1"
             if 'pipe_type' not in df_base.columns: df_base['pipe_type'] = "Freeze Pipe"
-            if 'design_length' not in df_base.columns: df_base['design_length'] = active_proj['default_length']
+            if 'design_length' not in df_base.columns: df_base['design_length'] = active_proj.get('default_length', 100.0)
             if 'design_inc' not in df_base.columns: df_base['design_inc'] = 0.0
             if 'design_az' not in df_base.columns: df_base['design_az'] = 0.0
-            
-            # Clean up Type strings for consistency
-            df_base['pipe_type'] = df_base['pipe_type'].fillna("Freeze Pipe").astype(str)
+            if 'design_z' not in df_base.columns: df_base['design_z'] = 0.0
 
+            # 4. PREVIEW (Safe Column Selection)
             st.write("### Previewing Upload Data")
-            st.dataframe(df_base[['hole_id', 'pipe_type', 'design_n', 'design_e', 'phase']].head())
+            # We use .get() or a list check to ensure we only show columns that exist
+            preview_cols = ['hole_id', 'pipe_type', 'design_n', 'design_e', 'phase']
+            available_preview = [c for c in preview_cols if c in df_base.columns]
+            st.dataframe(df_base[available_preview].head())
 
             if st.button("🚀 Confirm & Overwrite Phase"):
-                with st.spinner("Wiping old records and updating baseline..."):
-                    # Wipe duplicates for this project/phase combo
-                    del_q = f"DELETE FROM `sensorpush-export.survey.holes` WHERE project_id = '{active_proj['project_id']}' AND phase = '{df_base['phase'].iloc[0]}'"
+                with st.spinner("Updating Database..."):
+                    # Wipe old records for this project/phase
+                    p_id = str(active_proj['project_id'])
+                    phase_name = df_base['phase'].iloc[0]
+                    del_q = f"DELETE FROM `sensorpush-export.survey.holes` WHERE project_id = '{p_id}' AND phase = '{phase_name}'"
                     client.query(del_q).result()
                     
-                    upload_to_bq(df_base, "sensorpush-export.survey.holes")
-                    st.success(f"Baseline for {df_base['phase'].iloc[0]} updated successfully.")
+                    # Ensure we only upload the columns the DB expects
+                    db_cols = ['project_id', 'hole_id', 'design_n', 'design_e', 'design_z', 
+                               'phase', 'pipe_type', 'design_inc', 'design_az', 'design_length']
+                    final_df = df_base[[c for c in db_cols if c in df_base.columns]]
+                    
+                    upload_to_bq(final_df, "sensorpush-export.survey.holes")
+                    st.success(f"Baseline for {phase_name} updated successfully.")
+                    st.rerun()
                     st.rerun()
 
     # --- STEP 3: UPDATE TOP SURVEY (AS-BUILT) ---
