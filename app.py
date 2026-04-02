@@ -202,32 +202,77 @@ elif category == "Visualization":
 # 6. REPORTS (AUDIT & EXPORT)
 # ==========================================
 elif category == "Reports":
-    # 1. SIDEBAR NAVIGATION FOR REPORTS
+    # 1. SIDEBAR NAVIGATION
     report_action = st.sidebar.radio("Report Type", ["System Audit", "Deviation Summary", "Export Shifted Data"])
 
     if active_proj is None:
         st.error("❌ No Project Selected. Please select a project in the sidebar.")
-    elif report_action == "System Audit":
-    stats_query = f"""
-        SELECT 
-            COUNT(*) as total_baseline,
-            COUNTIF(actual_n != 0 AND actual_n IS NOT NULL) as top_surveys_done,
-            (SELECT COUNT(DISTINCT hole_id) FROM `sensorpush-export.survey.surveys` 
-             WHERE project_id = '{active_proj['project_id']}') as downhole_completed
-        FROM `sensorpush-export.survey.holes`
-        WHERE project_id = '{active_proj['project_id']}'
-    """
-    df_stats = run_query(stats_query)
-    
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Baseline (Design)", df_stats['total_baseline'][0]) # Should be 1105
-    c2.metric("Top Surveys (As-Built)", df_stats['top_surveys_done'][0]) # Should be 93
-    c3.metric("Downhole (Probed)", df_stats['downhole_completed'][0])
-    
+    else:
+        if report_action == "System Audit":
+            st.subheader(f"📊 Project Progress: {active_proj['name']}")
+            
+            # 2. RUN INTEGRATED STATS QUERY
+            # 'top_surveys_done' now specifically counts the 'actual_n' column
+            stats_query = f"""
+                SELECT 
+                    COUNT(*) as total_baseline,
+                    COUNTIF(actual_n != 0 AND actual_n IS NOT NULL) as top_surveys_done,
+                    (SELECT COUNT(DISTINCT hole_id) FROM `sensorpush-export.survey.surveys` 
+                     WHERE project_id = '{active_proj['project_id']}') as downhole_completed
+                FROM `sensorpush-export.survey.holes`
+                WHERE project_id = '{active_proj['project_id']}'
+            """
+            df_stats = run_query(stats_query)
+            
+            # 3. DISPLAY PROGRESS DASHBOARD
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Baseline (Design Grid)", df_stats['total_baseline'][0]) # Should be 1105
+            c2.metric("Top Surveys (As-Built)", df_stats['top_surveys_done'][0]) # Should be 93
+            c3.metric("Downhole (Probed)", df_stats['downhole_completed'][0])
+
+            st.divider()
+
+            # 4. GAP ANALYSIS: IDENTIFY HOLES WITHOUT AS-BUILTS
+            col_left, col_right = st.columns(2)
+
+            with col_left:
+                st.write("### 📍 Missing Top Surveys")
+                # Lists holes that have design coordinates but no 'actual' survey yet
+                missing_q = f"""
+                    SELECT hole_id, phase 
+                    FROM `sensorpush-export.survey.holes`
+                    WHERE project_id = '{active_proj['project_id']}'
+                    AND (actual_n = 0 OR actual_n IS NULL)
+                """
+                df_missing = run_query(missing_q)
+                if not df_missing.empty:
+                    st.warning(f"{len(df_missing)} holes are missing As-Built coordinates.")
+                    st.dataframe(df_missing)
+                else:
+                    st.success("✅ All 1,105 holes have been surveyed at the surface.")
+
+            with col_right:
+                st.write("### 🛰️ Survey Run Audit (Doubles)")
+                # Detects if any hole has multiple sets of data for the same depth
+                dup_survey_q = f"""
+                    SELECT hole_id, survey_type, COUNT(depth) as pts, COUNT(DISTINCT depth) as unique_depths
+                    FROM `sensorpush-export.survey.surveys`
+                    WHERE project_id = '{active_proj['project_id']}'
+                    GROUP BY hole_id, survey_type
+                    HAVING pts > unique_depths
+                """
+                df_dups = run_query(dup_survey_q)
+                if not df_dups.empty:
+                    st.error("Duplicate data points detected in Downhole surveys!")
+                    st.dataframe(df_dups)
+                else:
+                    st.success("No overlapping survey points detected.")
+
         elif report_action == "Deviation Summary":
-            st.subheader("Final Pipe Deviation Table")
-            # Logic for a table showing design vs actual exit points
+            st.subheader("Design vs. Actual Deviation")
+            st.info("This report will compare your million-value Northings to calculate drift.")
 
         elif report_action == "Export Shifted Data":
-            st.subheader("Download (0,0) Relative Data")
-            # Button for exporting your processed CSVs
+            st.subheader("Download Relative (0,0) CSV")
+            st.info("Exporting all 1,105 holes relative to your project origin.")
+        
