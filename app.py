@@ -195,7 +195,7 @@ if category == "Database Maintenance":
             for col in df_dh.columns:
                 c = clean_header(col)
                 # Map Depth/Length
-                if c in ['length', 'depth', 'md', 'measureddepth']:
+                if c in ['length', 'depth', 'md', 'measureddepth', 'Length']:
                     mapping[col] = 'depth'
                 # Map Hole ID
                 elif c in ['hole', 'pipe', 'holeid', 'id', 'name']:
