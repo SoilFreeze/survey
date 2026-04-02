@@ -131,6 +131,26 @@ if category == "Database Maintenance":
                 st.success("Baseline Uploaded!")
                 st.rerun()
 
+if st.button("Confirm & Upload to BigQuery"):
+    with st.spinner("Cleaning old baseline and uploading new data..."):
+        try:
+            # 1. Clear out existing holes for THIS project and THIS phase only
+            # This prevents duplicates if you upload the same phase twice
+            delete_query = f"""
+                DELETE FROM `sensorpush-export.survey.holes`
+                WHERE project_id = '{active_proj['project_id']}'
+                AND phase = '{df_final['phase'].iloc[0]}'
+            """
+            client.query(delete_query).result()
+
+            # 2. Upload the new data
+            upload_to_bq(df_final, "sensorpush-export.survey.holes")
+            
+            st.success(f"Baseline updated! Old records for this phase were replaced.")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Database Error: {e}")
+
 #### Update Top Survey ####
 
 elif choice == "3. Upload Top Survey":
