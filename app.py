@@ -111,36 +111,6 @@ if category == "Database Maintenance":
                 st.success(f"Project '{n_name}' created.")
                 st.rerun()
 
-    # --- STEP 2: UPLOAD BASELINE (PREVENTS DOUBLES) ---
-# ==========================================
-# 4. DATABASE MAINTENANCE (CLEANED VERSION)
-# ==========================================
-if category == "Database Maintenance":
-    # 1. Action Selector
-    action = st.radio("Action", ["Project Setup", "Upload Baseline", "Update Top Survey", "Upload Downhole", "Manage Data"], horizontal=True)
-    
-    # --- ACTION: PROJECT SETUP ---
-    if action == "Project Setup":
-        with st.form("new_proj"):
-            st.subheader("Configure New Project")
-            n_id = st.text_input("Project ID")
-            n_name = st.text_input("Project Name")
-            n_len = st.number_input("Standard Pipe Length (ft)", value=100.0)
-            n_on = st.number_input("Origin Northing", format="%.3f")
-            n_oe = st.number_input("Origin Easting", format="%.3f")
-            
-            if st.form_submit_button("Save Project"):
-                new_df = pd.DataFrame([{
-                    'project_id': n_id, 
-                    'name': n_name, 
-                    'default_length': n_len, 
-                    'origin_north': n_on, 
-                    'origin_east': n_oe
-                }])
-                upload_to_bq(new_df, "sensorpush-export.survey.projects")
-                st.success(f"Project '{n_name}' created.")
-                st.rerun()
-
     # --- ACTION: UPLOAD BASELINE (The 1,105-Hole Grid) ---
     elif action == "Upload Baseline":
         st.subheader("Step 2: Upload Design Baseline")
