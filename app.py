@@ -181,26 +181,52 @@ if category == "Database Maintenance":
                 client.delete_table(temp_id)
                 st.success("Surface Surveys Synced.")
 
-    # --- ACTION: UPLOAD DOWNHOLE (Probe Data) ---
+    # --- ACTION: UPLOAD DOWNHOLE (PROBE DATA) ---
     elif action == "Upload Downhole":
         st.subheader("Step 4: Upload Probe Data")
         dh_file = st.file_uploader("Upload Downhole CSV", type=['csv'])
+        
         if dh_file and active_proj is not None:
-            # Extract date from filename
+            # 1. Date Extraction from filename
             match = re.search(r'(\d{4})[.\-](\d{2})[.\-](\d{2})', dh_file.name)
             f_date = match.group(0).replace('.', '-') if match else datetime.now().strftime('%Y-%m-%d')
+            st.info(f"📅 Detected Survey Date: {f_date}")
             
+            # 2. Clean and Map Headers
             df_dh = pd.read_csv(dh_file)
             df_dh.columns = [c.lower().strip() for c in df_dh.columns]
-            df_dh = df_dh.rename(columns={'pipe':'hole_id', 'id':'hole_id'})
             
-            if st.button("Upload to Survey Table"):
+            # Expanded map to handle 'pipe', 'id', etc.
+            dh_map = {
+                'pipe': 'hole_id', 'id': 'hole_id', 'hole': 'hole_id',
+                'inc': 'inclination', 'az': 'azimuth', 'depth': 'depth'
+            }
+            df_dh = df_dh.rename(columns=dh_map)
+            
+            # 3. Validation
+            req_cols = ['hole_id', 'depth', 'azimuth', 'inclination']
+            missing = [c for c in req_cols if c not in df_dh.columns]
+            
+            if not missing:
                 df_dh['project_id'] = str(active_proj['project_id'])
                 df_dh['survey_date'] = f_date
-                # Only keep columns the DB expects
-                cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
-                upload_to_bq(df_dh[[c for c in cols if c in df_dh.columns]], "sensorpush-export.survey.surveys")
-                st.success(f"Uploaded {len(df_dh)} points for {f_date}")
+                # Ensure Hole ID is a clean string
+                df_dh['hole_id'] = df_dh['hole_id'].astype(str).str.strip()
+
+                st.dataframe(df_dh[['hole_id', 'depth', 'azimuth', 'inclination']].head())
+
+                if st.button("🚀 Upload to Survey Table"):
+                    try:
+                        # ONLY send columns that exist in the BigQuery table
+                        final_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
+                        upload_to_bq(df_dh[final_cols], "sensorpush-export.survey.surveys")
+                        st.success(f"Successfully uploaded {len(df_dh)} points for {f_date}")
+                    except Exception as e:
+                        st.error(f"BigQuery Error: {e}")
+                        st.info("Check if you added the 'survey_date' column to the surveys table.")
+            else:
+                st.error(f"CSV is missing columns: {', '.join(missing)}")
+                st.write("Found headers:", list(df_dh.columns))
 
     # --- ACTION: MANAGE DATA (Danger Zone) ---
     elif action == "Manage Data":
