@@ -256,3 +256,67 @@ elif choice == "3. Upload Top Survey":
                         st.success(f"Successfully updated {len(df_top)} holes in seconds!")
             else:
                 st.error("Missing required columns (ID, North, East).")
+
+#### Upload Downhole ####
+
+elif choice == "4. Upload Downhole":
+    if active_proj is not None:
+        st.subheader(f"Step 4: Import Downhole Survey for {active_proj['name']}")
+        
+        # Robust aliases for Boretrak, Gyro, or Deviometer files
+        column_aliases = {
+            'hole_id': ['hole_id', 'id', 'name', 'hole', 'point', 'station', 'label'],
+            'depth': ['depth', 'md', 'length', 'dist', 'distance', 'measured_depth'],
+            'azimuth': ['azimuth', 'azi', 'az', 'dir', 'direction', 'bearing'],
+            'inclination': ['inclination', 'inc', 'dip', 'angle', 'vertical_angle']
+        }
+
+        # Optional: Add a 'Survey Type' selector for the database
+        s_type = st.selectbox("Survey Type", ["Pipe", "Casing", "Pre-Freeze", "Post-Freeze"])
+        
+        downhole_file = st.file_uploader("Upload Downhole CSV (Depth, Azi, Inc)", type=['csv'])
+        
+        if downhole_file:
+            df_dh = pd.read_csv(downhole_file)
+            
+            # Robust mapping logic
+            rename_map = {}
+            for official_name, aliases in column_aliases.items():
+                for col in df_dh.columns:
+                    if col.lower().strip() in aliases:
+                        rename_map[col] = official_name
+                        break
+            
+            df_dh = df_dh.rename(columns=rename_map)
+            
+            # Ensure IDs are strings to match BigQuery schema
+            if 'hole_id' in df_dh.columns:
+                df_dh['hole_id'] = df_dh['hole_id'].astype(str).str.strip()
+                df_dh['project_id'] = str(active_proj['project_id'])
+                df_dh['survey_type'] = s_type
+                
+                # Check for minimum required survey data
+                required = ['depth', 'azimuth', 'inclination']
+                missing = [c for c in required if c not in df_dh.columns]
+                
+                if not missing:
+                    st.write(f"✅ Found {len(df_dh)} survey points.")
+                    st.dataframe(df_dh[['hole_id', 'depth', 'azimuth', 'inclination']].head())
+                    
+                    if st.button("Confirm & Append to BigQuery"):
+                        with st.spinner("Uploading survey data..."):
+                            # We append here so you don't lose old survey runs
+                            final_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_type']
+                            df_to_push = df_dh[final_cols].copy()
+                            
+                            try:
+                                upload_to_bq(df_to_push, "sensorpush-export.survey.surveys")
+                                st.success(f"Added {len(df_to_push)} points to {active_proj['name']}.")
+                            except Exception as e:
+                                st.error(f"Upload failed: {e}")
+                else:
+                    st.error(f"Missing survey columns: {missing}")
+            else:
+                st.error("Could not find Hole ID column.")
+    else:
+        st.warning("Select a project in the sidebar first.")
