@@ -161,61 +161,74 @@ if category == "Database Maintenance":
                 st.success("Surface As-Builts updated.")
 
     # --- STEP 4: UPLOAD DOWNHOLE (PROBE DATA) ---
+    # --- ACTION: UPLOAD DOWNHOLE (PROBE DATA) ---
     elif action == "Upload Downhole":
         st.subheader("Step 4: Upload Probe Data")
         dh_file = st.file_uploader("Upload Downhole CSV", type=['csv'])
         
         if dh_file and active_proj is not None:
-            # 1. Date Extraction: Pulls date from filename (e.g., 2026.02.13)
-            match = re.search(r'(\d{4})[.\-](\d{2})[.\-](\d{2})', dh_file.name)
-            f_date = match.group(0).replace('.', '-') if match else datetime.now().strftime('%Y-%m-%d')
-            st.info(f"📅 Detected Survey Date: {f_date}")
+            # 1. ROBUST DATE EXTRACTION (Handles 2-13-26, 2026.02.13, etc.)
+            def get_smart_date(name):
+                # Try MM-DD-YY or YYYY-MM-DD
+                pattern = r'(\d{1,4})[.\-](\d{1,2})[.\-](\d{2,4})'
+                m = re.search(pattern, name)
+                if m:
+                    g = m.groups()
+                    if len(g[0]) == 4: # YYYY-MM-DD
+                        return f"{g[0]}-{g[1].zfill(2)}-{g[2].zfill(2)}"
+                    else: # MM-DD-YY
+                        yr = "20" + g[2] if len(g[2]) == 2 else g[2]
+                        return f"{yr}-{g[0].zfill(2)}-{g[1].zfill(2)}"
+                return datetime.now().strftime('%Y-%m-%d')
+
+            f_date = get_smart_date(dh_file.name)
+            st.info(f"📅 Detected Survey Date: **{f_date}**")
             
-            # 2. Load and Clean Headers
+            # 2. LOAD DATA
             df_dh = pd.read_csv(dh_file)
-            df_dh.columns = [c.lower().strip() for c in df_dh.columns]
             
-            # 3. Explicit Mapping for your Standard Format
-            # This turns 'length' into 'depth' and 'hole' into 'hole_id'
-            dh_map = {
-                'hole': 'hole_id', 
-                'Length': 'depth', 
-                'azimuth': 'azimuth', 
-                'inclination': 'inclination'
-            }
-            df_dh = df_dh.rename(columns=dh_map)
-            
-            # 4. Check for Required Columns
+            # 3. KEYWORD HARVESTER (Case-Insensitive & Partial Matching)
+            # This scans your headers and renames them to what the DB expects
+            for col in df_dh.columns:
+                c_low = col.lower().strip()
+                if 'hole' in c_low or 'pipe' in c_low:
+                    df_dh = df_dh.rename(columns={col: 'hole_id'})
+                elif 'length' in c_low or 'depth' in c_low:
+                    df_dh = df_dh.rename(columns={col: 'depth'})
+                elif 'azi' in c_low:
+                    df_dh = df_dh.rename(columns={col: 'azimuth'})
+                elif 'inc' in c_low:
+                    df_dh = df_dh.rename(columns={col: 'inclination'})
+
+            # 4. VALIDATION & CLEANUP
             req_cols = ['hole_id', 'depth', 'azimuth', 'inclination']
             missing = [c for c in req_cols if c not in df_dh.columns]
             
             if not missing:
-                # Add metadata columns
                 df_dh['project_id'] = str(active_proj['project_id'])
                 df_dh['survey_date'] = f_date
                 
-                # Cleanup: Ensure no empty spaces in pipe names and fill missing surface angles
+                # Force clean data types
                 df_dh['hole_id'] = df_dh['hole_id'].astype(str).str.strip()
-                df_dh['azimuth'] = df_dh['azimuth'].fillna(0.0)
-                df_dh['inclination'] = df_dh['inclination'].fillna(0.0)
+                df_dh['azimuth'] = pd.to_numeric(df_dh['azimuth'], errors='coerce').fillna(0.0)
+                df_dh['inclination'] = pd.to_numeric(df_dh['inclination'], errors='coerce').fillna(0.0)
 
-                st.write("### Preview (Ready for Upload)")
+                st.write("### Data Preview (Corrected Mappings)")
                 st.dataframe(df_dh[['hole_id', 'depth', 'azimuth', 'inclination']].head())
 
-                if st.button("🚀 Upload Probe Data"):
-                    # Use the actual row count for the spinner instead of the '1105' placeholder
-                    with st.spinner(f"Uploading {len(df_dh)} data points to BigQuery..."):
+                if st.button("🚀 Upload to BigQuery"):
+                    with st.spinner(f"Uploading {len(df_dh)} points..."):
                         try:
-                            # Filter to ONLY the columns the Database understands
+                            # Only send columns that exist in the BigQuery table
                             final_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
                             upload_to_bq(df_dh[final_cols], "sensorpush-export.survey.surveys")
                             st.success(f"Successfully uploaded {len(df_dh)} points for {f_date}")
                         except Exception as e:
                             st.error(f"BigQuery Error: {e}")
-                            st.info("💡 Did you run the SQL to add 'survey_date' to the surveys table?")
+                            st.info("💡 Ensure you added the 'survey_date' column to the surveys table.")
             else:
-                st.error(f"CSV is missing columns: {', '.join(missing)}")
-                st.write("Headers found in your file:", list(df_dh.columns))
+                st.error(f"Mapping failed. Missing columns: {', '.join(missing)}")
+                st.write("Found headers in CSV:", list(df_dh.columns))
 
     # --- STEP 5: MANAGE DATA ---
     elif action == "Manage Data":
