@@ -164,7 +164,7 @@ if category == "Database Maintenance":
     # --- ACTION: UPLOAD DOWNHOLE (PROBE DATA) ---
     elif action == "Upload Downhole":
         st.subheader("Step 4: Upload Probe Data")
-        dh_file = st.file_uploader("Upload Downhole CSV", type=['csv'], key="dh_uploader")
+        dh_file = st.file_uploader("Upload Downhole CSV", type=['csv'], key="dh_up_fixed")
         
         if dh_file and active_proj is not None:
             # 1. ROBUST DATE EXTRACTION (Handles 2-13-26 or 2026.02.13)
@@ -183,12 +183,12 @@ if category == "Database Maintenance":
             f_date = get_smart_date(dh_file.name)
             st.info(f"📅 Detected Survey Date: **{f_date}**")
             
-            # 2. LOAD & NORMALIZE
+            # 2. LOAD DATA & CLEAN HEADERS
             df_dh = pd.read_csv(dh_file)
             df_dh.columns = [c.lower().strip() for c in df_dh.columns]
             
-            # 3. THE FIX: MAP LENGTH TO DEPTH
-            # This translates your CSV headers to match the Database columns
+            # 3. EXPLICIT MAPPING FOR YOUR FILE
+            # We rename 'length' to 'depth' so the DB is happy
             dh_map = {
                 'length': 'depth',
                 'hole': 'hole_id',
@@ -204,27 +204,28 @@ if category == "Database Maintenance":
                 df_dh['project_id'] = str(active_proj['project_id'])
                 df_dh['survey_date'] = f_date
                 
-                # Cleanup data types
+                # Cleanup Data: Force numbers and remove whitespace from IDs
                 df_dh['hole_id'] = df_dh['hole_id'].astype(str).str.strip()
+                df_dh['depth'] = pd.to_numeric(df_dh['depth'], errors='coerce')
                 df_dh['azimuth'] = pd.to_numeric(df_dh['azimuth'], errors='coerce').fillna(0.0)
                 df_dh['inclination'] = pd.to_numeric(df_dh['inclination'], errors='coerce').fillna(0.0)
 
                 st.write("### Data Preview (Mapped Columns)")
                 st.dataframe(df_dh[['hole_id', 'depth', 'azimuth', 'inclination']].head())
 
-                if st.button("🚀 Upload to BigQuery", key="upload_dh_btn"):
-                    with st.spinner(f"Uploading {len(df_dh)} survey points..."):
+                if st.button("🚀 Upload to BigQuery", key="dh_btn_final"):
+                    with st.spinner(f"Uploading {len(df_dh)} points..."):
                         try:
-                            # Only send the 6 columns the DB expects
+                            # Final Column Selection
                             final_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
                             upload_to_bq(df_dh[final_cols], "sensorpush-export.survey.surveys")
                             st.success(f"Successfully uploaded {len(df_dh)} points for {f_date}")
                         except Exception as e:
                             st.error(f"BigQuery Error: {e}")
-                            st.info("💡 Reminder: Ensure you added 'survey_date' to the surveys table via SQL.")
+                            st.info("💡 Reminder: Ensure you added 'survey_date' to the surveys table.")
             else:
-                st.error(f"Mapping failed. Missing columns: {', '.join(missing)}")
-                st.write("Headers found in your file (cleaned):", list(df_dh.columns))
+                st.error(f"Mapping failed. Missing: {', '.join(missing)}")
+                st.write("Headers found in your file:", list(df_dh.columns))
 
     # --- STEP 5: MANAGE DATA ---
     elif action == "Manage Data":
