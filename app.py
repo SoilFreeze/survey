@@ -59,28 +59,65 @@ def upload_to_bq(df, table_id):
 # 4. USER INTERFACE (MAIN APP)
 # ==========================================
 st.set_page_config(page_title="SoilFreeze Survey", layout="wide")
-st.title("🏗️ SoilFreeze Survey Manager")
 
-# Sidebar Workflow Navigation
-menu = ["Project Dashboard", "1. Create Project", "2. Upload Baseline", "3. Upload Top Survey", "4. Upload Downhole"]
-choice = st.sidebar.selectbox("Navigation", menu)
+# GLOBAL PROJECT SELECTOR
+# We fetch projects from BigQuery to populate the sidebar menu
+def get_project_list():
+    query = "SELECT project_id, name, origin_north, origin_east FROM `sensorpush-export.survey.projects` ORDER BY name"
+    return run_query(query)
+
+df_projects = get_project_list()
+
+with st.sidebar:
+    st.title("🏗️ SoilFreeze Manager")
+    
+    if not df_projects.empty:
+        # This is your "Menu of projects already created"
+        selected_project_name = st.selectbox(
+            "Current Project Context:", 
+            options=df_projects['name'].tolist(),
+            help="All uploads and charts will apply to this project."
+        )
+        # Store the active project details in a variable
+        active_proj = df_projects[df_projects['name'] == selected_project_name].iloc[0]
+        st.info(f"Active ID: {active_proj['project_id']}")
+    else:
+        st.warning("No projects found. Please create one below.")
+        active_proj = None
+
+    st.divider()
+    menu = ["Project Dashboard", "1. Create New Project", "2. Upload Baseline", "3. Upload Top Survey", "4. Upload Downhole"]
+    choice = st.selectbox("Navigation", menu)
+
+# --- WORKFLOW PAGES ---
 
 if choice == "Project Dashboard":
-    st.subheader("Project Analysis & Visualization")
-    # Dashboard logic goes here
-    
-elif choice == "1. Create Project":
-    st.subheader("Setup New Project Origin")
-    # Form for survey.projects
+    if active_proj is not None:
+        st.subheader(f"Analysis: {active_proj['name']}")
+        # Visualizer logic goes here
+    else:
+        st.error("Select or create a project first.")
+
+elif choice == "1. Create New Project":
+    st.subheader("Setup New Project")
+    with st.form("new_project_form", clear_on_submit=True):
+        new_id = st.text_input("Project ID (Unique Code)")
+        new_name = st.text_input("Project Name (Display Name)")
+        new_on = st.number_input("Origin Northing", format="%.3f")
+        new_oe = st.number_input("Origin Easting", format="%.3f")
+        
+        if st.form_submit_button("Save to Database"):
+            new_data = pd.DataFrame([{
+                'project_id': new_id,
+                'name': new_name,
+                'origin_north': new_on,
+                'origin_east': new_oe
+            }])
+            upload_to_bq(new_data, "sensorpush-export.survey.projects")
+            st.success("Project Saved! Refreshing...")
+            st.rerun() # Refresh the sidebar menu
 
 elif choice == "2. Upload Baseline":
-    st.subheader("Import Design Data")
-    # Form for survey.holes
-
-elif choice == "3. Upload Top Survey":
-    st.subheader("Import Actual Collar Locations")
-    # Update logic for survey.holes
-
-elif choice == "4. Upload Downhole":
-    st.subheader("Import Boretrak/Gyro Data")
-    # Form for survey.surveys
+    if active_proj is not None:
+        st.subheader(f"Upload Baseline for {active_proj['name']}")
+        # This will use active_proj['project_id'] to tag the data
