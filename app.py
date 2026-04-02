@@ -1,8 +1,4 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+otly.subplots import make_subplots
 from google.cloud import bigquery
 from google.oauth2 import service_account
 import re
@@ -85,8 +81,7 @@ if category == "Database Maintenance":
     action = st.radio(
         "Action", 
         ["Project Setup", "Upload Baseline", "Update Top Survey", "Upload Downhole", "Manage Data"], 
-        horizontal=True,
-        key="db_maint_v2"
+        horizontal=True
     )
 
     # --- STEP 1: PROJECT SETUP ---
@@ -162,27 +157,26 @@ if category == "Database Maintenance":
                 client.delete_table(temp_id)
                 st.success("Surface As-Builts updated.")
 
-    # --- STEP 4: UPLOAD DOWNHOLE (PROBE DATA) ---
-    # --- STEP 4: UPLOAD DOWNHOLE ---
-    elif action == "Upload Downhole":
+    # --- STEP 4: UPLOAD DOWNHOLE (THE CRITICAL FIX) ---
+    if action == "Upload Downhole":
         st.subheader("Step 4: Upload Probe Data")
         dh_file = st.file_uploader("Upload Downhole CSV", type=['csv'])
         
         if dh_file and active_proj is not None:
-            # Date detection logic...
             f_date = get_smart_date(dh_file.name)
             st.info(f"📅 Detected Survey Date: **{f_date}**")
             
+            # Load with BOM handling
             df_dh = pd.read_csv(dh_file, encoding='utf-8-sig')
             
-            # BUILD THE TRANSLATION DICTIONARY
+            # 1. Build Mapping (Case insensitive, space stripping)
             mapping = {}
             for col in df_dh.columns:
                 c_low = col.lower().strip()
                 if any(kw in c_low for kw in ['hole', 'pipe']):
                     mapping[col] = 'hole_id'
                 elif any(kw in c_low for kw in ['length', 'depth', 'md']):
-                    mapping[col] = 'length' # Standardizing on length
+                    mapping[col] = 'length' # Standardized target
                 elif 'azi' in c_low:
                     mapping[col] = 'azimuth'
                 elif 'inc' in c_low:
@@ -190,7 +184,7 @@ if category == "Database Maintenance":
 
             df_dh = df_dh.rename(columns=mapping)
 
-            # VALIDATION (Now looking for length)
+            # 2. Strict Validation (Only looking for length now)
             req_cols = ['hole_id', 'length', 'azimuth', 'inclination']
             missing = [c for c in req_cols if c not in df_dh.columns]
             
@@ -198,21 +192,40 @@ if category == "Database Maintenance":
                 df_dh['project_id'] = str(active_proj['project_id'])
                 df_dh['survey_date'] = f_date
                 
-                # Cleanup
+                # Cleanup Numeric Types
                 df_dh['length'] = pd.to_numeric(df_dh['length'], errors='coerce')
-                df_dh = df_dh.dropna(subset=['length'])
+                df_dh['azimuth'] = pd.to_numeric(df_dh['azimuth'], errors='coerce').fillna(0.0)
+                df_dh['inclination'] = pd.to_numeric(df_dh['inclination'], errors='coerce').fillna(0.0)
+                
+                # Drop junk/footer rows
+                df_dh = df_dh.dropna(subset=['length', 'hole_id'])
 
                 st.write("### ✅ Mapping Success")
                 st.dataframe(df_dh[req_cols].head())
 
                 if st.button("🚀 Upload to BigQuery"):
-                    with st.spinner("Uploading..."):
+                    with st.spinner("Uploading data..."):
                         final_cols = ['project_id', 'hole_id', 'length', 'azimuth', 'inclination', 'survey_date']
                         upload_to_bq(df_dh[final_cols], "sensorpush-export.survey.surveys")
-                        st.success(f"Uploaded {len(df_dh)} points.")
+                        st.success(f"Successfully uploaded {len(df_dh)} points.")
             else:
                 st.error(f"CSV is missing columns: {', '.join(missing)}")
-                st.write("Headers found:", list(df_dh.columns))
+                st.write("Detected Headers:", list(df_dh.columns))
+
+    # (Other Database Maintenance sections like Project Setup remain as they were)
+    elif action == "Project Setup":
+        with st.form("new_proj_form"):
+            st.subheader("1. Setup New Project")
+            n_id = st.text_input("Project ID")
+            n_name = st.text_input("Project Name")
+            n_len = st.number_input("Standard Pipe Length (ft)", value=100.0)
+            n_on = st.number_input("Origin Northing")
+            n_oe = st.number_input("Origin Easting")
+            if st.form_submit_button("Save Project"):
+                df_new = pd.DataFrame([{'project_id':n_id, 'name':n_name, 'default_length':n_len, 'origin_north':n_on, 'origin_east':n_oe}])
+                upload_to_bq(df_new, "sensorpush-export.survey.projects")
+                st.success("Project Saved.")
+                st.rerun()
                 
     # --- STEP 5: MANAGE DATA ---
     elif action == "Manage Data":
@@ -229,13 +242,13 @@ if category == "Database Maintenance":
 
 
 # ==========================================
-# 5. VISUALIZATION
+# 5. VISUALIZATION (Fully Scrubbed for 'length')
 # ==========================================
 elif category == "Visualization":
     view = st.radio("View Type", ["Whole Site Map", "Single Hole Analysis", "Elevation Slice"], horizontal=True)
     
     if active_proj is not None:
-        # Fetch data using 'length'
+        # Pull data using the 'length' column name
         q = f"""SELECT h.*, s.length, s.azimuth, s.inclination 
                 FROM `sensorpush-export.survey.holes` h 
                 LEFT JOIN `sensorpush-export.survey.surveys` s ON h.hole_id = s.hole_id 
@@ -250,10 +263,14 @@ elif category == "Visualization":
             df_viz['n_rel'] = df_viz['design_n'] - active_proj['origin_north']
             df_viz['e_rel'] = df_viz['design_e'] - active_proj['origin_east']
             df_viz['has_top'] = df_viz['actual_n'].notnull() & (df_viz['actual_n'] != 0)
-            df_viz['has_downhole'] = df_viz['length'].notnull() # Flag based on length
+            df_viz['has_downhole'] = df_viz['length'].notnull()
             
             fig = go.Figure()
-            # ... (Plotting code for site map remains same, using 'has_downhole' flag) ...
+            # Plotting logic for hole status...
+            for status, color in [(False, 'lightgrey'), (True, 'black')]:
+                mask = df_viz['has_downhole'] == status
+                fig.add_trace(go.Scatter(x=df_viz.loc[mask, 'e_rel'], y=df_viz.loc[mask, 'n_rel'],
+                                         mode='markers', name=f"Downhole: {status}", marker=dict(color=color)))
             st.plotly_chart(fig, use_container_width=True)
 
         elif view == "Single Hole Analysis":
@@ -262,23 +279,23 @@ elif category == "Visualization":
                 target = st.selectbox("Select Hole", sorted(surveyed_ids))
                 df_h = df_viz[df_viz['hole_id'] == target].copy()
                 
-                # Math Engine Call
-                s_n_rel = (df_h['actual_n'].iloc[0] or df_h['design_n'].iloc[0]) - active_proj['origin_north']
-                s_e_rel = (df_h['actual_e'].iloc[0] or df_h['design_e'].iloc[0]) - active_proj['origin_east']
-                processed = calculate_survey_path(df_h, s_n_rel, s_e_rel)
+                # Pivot anchor point logic
+                start_n = (df_h['actual_n'].iloc[0] or df_h['design_n'].iloc[0]) - active_proj['origin_north']
+                start_e = (df_h['actual_e'].iloc[0] or df_h['design_e'].iloc[0]) - active_proj['origin_east']
+                
+                processed = calculate_survey_path(df_h, start_n, start_e)
                 
                 fig = make_subplots(rows=1, cols=2, subplot_titles=("East Dev (ft)", "North Dev (ft)"))
-                fig.add_trace(go.Scatter(x=processed['e_rel'], y=processed['length'], name="East", line=dict(color='blue')), row=1, col=1)
-                fig.add_trace(go.Scatter(x=processed['n_rel'], y=processed['length'], name="North", line=dict(color='red')), row=1, col=2)
+                fig.add_trace(go.Scatter(x=processed['e_rel'], y=processed['length'], name="East"), row=1, col=1)
+                fig.add_trace(go.Scatter(x=processed['n_rel'], y=processed['length'], name="North"), row=1, col=2)
                 fig.update_yaxes(autorange="reversed", title="Length (ft)")
                 st.plotly_chart(fig, use_container_width=True)
             else:
-                st.warning("No survey data (length) found.")
+                st.warning("No survey data (length) found for this project.")
 
         elif view == "Elevation Slice":
-            st.subheader("Subsurface Slice")
             slice_val = st.slider("Target Length (ft)", 0, 250, 50)
-            st.info(f"Showing intersection at {slice_val}ft length.")
+            st.info(f"Visualizing intersections at {slice_val}ft.")
             
 # ==========================================
 # 6. REPORTS
