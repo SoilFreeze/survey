@@ -50,8 +50,8 @@ def calculate_survey_path(df, start_n, start_e):
 # ==========================================
 # 3. GLOBAL SIDEBAR
 # ==========================================
-st.sidebar.title("🏗️ SoilFreeze Hub")
 
+st.sidebar.title("🏗️ SoilFreeze Hub")
 df_projects = run_query("SELECT * FROM `sensorpush-export.survey.projects` ORDER BY name")
 
 if not df_projects.empty:
@@ -123,21 +123,21 @@ if category == "Database Maintenance":
                 client.delete_table(temp_id)
                 st.success("Surface As-Builts updated.")
 
-    # --- STEP 4: UPLOAD DOWNHOLE (PROBE DATA) ---
-    elif action == "Upload Downhole":
+    
+    # --- UPLOAD DOWNHOLE (THE FIX IS HERE) ---
+    if action == "Upload Downhole":
         st.subheader("Step 4: Upload Probe Data")
         dh_file = st.file_uploader("Upload Downhole CSV", type=['csv'])
         
         if dh_file and active_proj is not None:
-            # 1. IMPROVED DATE PARSING
+            # 1. Precise Date Logic (Fixes the 2026-04-02 issue)
             def get_smart_date(name):
-                # Specifically looks for M-D-Y patterns in filenames like '2-13-26 F48.csv'
                 pattern = r'(\d{1,2})[.\-](\d{1,2})[.\-](\d{2,4})'
                 m = re.search(pattern, name)
                 if m:
                     month, day, year = m.groups()
-                    full_year = "20" + year if len(year) == 2 else year
-                    return f"{full_year}-{month.zfill(2)}-{day.zfill(2)}"
+                    full_yr = "20" + year if len(year) == 2 else year
+                    return f"{full_yr}-{month.zfill(2)}-{day.zfill(2)}"
                 return datetime.now().strftime('%Y-%m-%d')
 
             f_date = get_smart_date(dh_file.name)
@@ -145,43 +145,45 @@ if category == "Database Maintenance":
             
             df_dh = pd.read_csv(dh_file)
             
-            # 2. THE HARVESTER (No more "Missing Column" errors)
+            # 2. Flexible Keyword Harvester
+            # This maps YOUR CSV headers to OUR logic
             rename_map = {}
             for col in df_dh.columns:
                 c_low = col.lower().strip()
                 if any(k in c_low for k in ['hole', 'pipe', 'id']): rename_map[col] = 'hole_id'
-                elif any(k in c_low for k in ['depth', 'length', 'dist']): rename_map[col] = 'length'
+                elif any(k in c_low for k in ['length', 'depth', 'dist']): rename_map[col] = 'length'
                 elif 'azi' in c_low: rename_map[col] = 'azimuth'
                 elif 'inc' in c_low: rename_map[col] = 'inclination'
 
             df_dh = df_dh.rename(columns=rename_map)
             
-            # 3. VERIFY & CLEAN
-            expected = ['hole_id', 'length', 'azimuth', 'inclination']
-            found_cols = [c for c in expected if c in df_dh.columns]
-            
-            if len(found_cols) == 4:
-                # Add metadata
+            # 3. Clean and Upload
+            req = ['hole_id', 'length', 'azimuth', 'inclination']
+            if all(c in df_dh.columns for c in req):
                 df_dh['project_id'] = str(active_proj['project_id'])
                 df_dh['survey_date'] = f_date
                 
-                # Convert to numeric to be safe
                 for c in ['length', 'azimuth', 'inclination']:
                     df_dh[c] = pd.to_numeric(df_dh[c], errors='coerce').fillna(0.0)
 
-                st.success("✅ CSV Mapped Successfully!")
-                st.dataframe(df_dh[expected].head())
+                st.write("### Data Preview")
+                st.dataframe(df_dh[req].head())
 
                 if st.button("🚀 Upload to BigQuery"):
-                    # Ensure we only send what the DB expects
-                    # IF YOUR DB STILL USES 'depth', CHANGE 'length' TO 'depth' BELOW
-                    final_cols = ['project_id', 'hole_id', 'length', 'azimuth', 'inclination', 'survey_date']
-                    upload_to_bq(df_dh[final_cols], "sensorpush-export.survey.surveys")
-                    st.success("Upload Complete.")
+                    with st.spinner("Translating Length to Depth for BigQuery..."):
+                        try:
+                            # CRITICAL MAPPING: 
+                            # We use 'length' everywhere, but BQ table uses 'depth'
+                            upload_df = df_dh.copy()
+                            upload_df = upload_df.rename(columns={'length': 'depth'})
+                            
+                            final_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
+                            upload_to_bq(upload_df[final_cols], "sensorpush-export.survey.surveys")
+                            st.success(f"Successfully uploaded {len(df_dh)} rows.")
+                        except Exception as e:
+                            st.error(f"BigQuery Error: {e}")
             else:
-                missing = set(expected) - set(found_cols)
-                st.error(f"Mapping failed. Could not find: {missing}")
-                st.write("Headers found in your file:", list(df_dh.columns))
+                st.error("Could not find required columns (Hole ID, Length, Azimuth, Inclination)")
 
 # ==========================================
 # 5. VISUALIZATION
@@ -189,18 +191,25 @@ if category == "Database Maintenance":
 elif category == "Visualization":
     view = st.radio("View Type", ["Whole Site Map", "Single Hole Analysis"], horizontal=True)
     if active_proj is not None:
-        q = f"SELECT h.*, s.length, s.azimuth, s.inclination FROM `sensorpush-export.survey.holes` h LEFT JOIN `sensorpush-export.survey.surveys` s ON h.hole_id = s.hole_id WHERE h.project_id = '{active_proj['project_id']}'"
+        # Fetching 'depth' from DB but renaming to 'length' immediately for the app
+        q = f"""SELECT h.*, s.depth as length, s.azimuth, s.inclination 
+                FROM `sensorpush-export.survey.holes` h 
+                LEFT JOIN `sensorpush-export.survey.surveys` s ON h.hole_id = s.hole_id 
+                WHERE h.project_id = '{active_proj['project_id']}'"""
         df_viz = run_query(q)
-        if active_phase != "All Phases": df_viz = df_viz[df_viz['phase'] == active_phase]
 
-        if view == "Whole Site Map":
-            st.subheader(f"Project Grid: {active_proj['name']}")
-            df_viz['n_rel'] = df_viz['design_n'] - active_proj['origin_north']
-            df_viz['e_rel'] = df_viz['design_e'] - active_proj['origin_east']
-            df_viz['has_downhole'] = df_viz['length'].notnull()
-            fig = go.Figure()
-            # [Add marker plotting logic here using df_viz['e_rel'], df_viz['n_rel']]
-            st.plotly_chart(fig, use_container_width=True)
+        if view == "Single Hole Analysis":
+            surveyed_ids = df_viz.dropna(subset=['length'])['hole_id'].unique()
+            if len(surveyed_ids) > 0:
+                target = st.selectbox("Select Hole", sorted(surveyed_ids))
+                df_h = df_viz[df_viz['hole_id'] == target].copy()
+                processed = calculate_survey_path(df_h, df_h['design_n'].iloc[0], df_h['design_e'].iloc[0])
+                
+                fig = make_subplots(rows=1, cols=2, subplot_titles=("East Dev", "North Dev"))
+                fig.add_trace(go.Scatter(x=processed['e_rel'], y=processed['length'], name="East"), row=1, col=1)
+                fig.add_trace(go.Scatter(x=processed['n_rel'], y=processed['length'], name="North"), row=1, col=2)
+                fig.update_yaxes(autorange="reversed", title="Length (ft)")
+                st.plotly_chart(fig, use_container_width=True)
 
         elif view == "Single Hole Analysis":
             surveyed_ids = df_viz.dropna(subset=['length'])['hole_id'].unique()
