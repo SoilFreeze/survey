@@ -96,32 +96,29 @@ if choice == "Project Dashboard":
     if active_proj is not None:
         st.subheader(f"📊 Analysis: {active_proj['name']}")
         
-        # 1. FETCH DATA: Join Holes and Surveys for this project
+        # 1. FETCH DATA: Only get holes that have matching survey records
         query = f"""
             SELECT 
                 h.hole_id, h.design_n, h.design_e, h.design_z,
                 s.depth, s.azimuth, s.inclination, s.survey_type
             FROM `sensorpush-export.survey.holes` h
-            LEFT JOIN `sensorpush-export.survey.surveys` s ON h.hole_id = s.hole_id
+            INNER JOIN `sensorpush-export.survey.surveys` s ON h.hole_id = s.hole_id
             WHERE h.project_id = '{active_proj['project_id']}'
             ORDER BY h.hole_id, s.depth
         """
-        df_all = run_query(query)
+        df_surveyed = run_query(query)
 
-        if not df_all.empty:
-            # 2. SELECT HOLE
-            hole_list = sorted(df_all['hole_id'].unique())
-            target_hole = st.selectbox("Select Pipe to Visualize", hole_list)
+        if not df_surveyed.empty:
+            # 2. SELECT HOLE: This list now only contains surveyed pipes
+            surveyed_list = sorted(df_surveyed['hole_id'].unique())
+            target_hole = st.selectbox("Select Surveyed Pipe", surveyed_list)
             
-            # Filter data for the specific pipe
-            df_hole = df_all[df_all['hole_id'] == target_hole].copy()
+            # Filter for the specific pipe
+            df_hole = df_surveyed[df_surveyed['hole_id'] == target_hole].copy()
             
             # 3. CALCULATE RELATIVE PATH (0,0 Shift)
-            # Use actual collar as start point, then subtract project origin
             start_n = df_hole['design_n'].iloc[0] - active_proj['origin_north']
             start_e = df_hole['design_e'].iloc[0] - active_proj['origin_east']
-            
-            # Calculate path using math_engine logic
             processed = calculate_survey_path(df_hole, start_n, start_e)
             
             # 4. INTERACTIVE PLOTS
