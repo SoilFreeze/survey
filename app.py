@@ -151,20 +151,19 @@ elif choice == "2. Upload Baseline":
     if active_proj is not None:
         st.subheader(f"Step 2: Import Design Baseline for {active_proj['name']}")
         
-    # Updated Aliases to include CADX/CADY
         column_aliases = {
-            'hole_id': ['hole_id', 'id', 'name', 'hole', 'point', 'station'],
+            'hole_id': ['hole_id', 'id', 'name', 'hole', 'point', 'station', 'label'],
             'design_n': ['design_n', 'north', 'northing', 'y', 'n', 'cady', 'pos_y'],
             'design_e': ['design_e', 'east', 'easting', 'x', 'e', 'cadx', 'pos_x'],
             'design_z': ['design_z', 'ele', 'elevation', 'z', 'rl', 'level', 'elev']
-        }        
+        }
 
         baseline_file = st.file_uploader("Upload Baseline CSV", type=['csv'])
         
         if baseline_file:
+            # We read 'hole_id' specifically as a string from the start
             df_base = pd.read_csv(baseline_file)
             
-            # 1. Map columns
             rename_map = {}
             for official_name, aliases in column_aliases.items():
                 for col in df_base.columns:
@@ -174,30 +173,28 @@ elif choice == "2. Upload Baseline":
 
             df_base = df_base.rename(columns=rename_map)
             
-            required = ['hole_id', 'design_n', 'design_e']
-            missing = [col for col in required if col not in df_base.columns]
-
-            if not missing:
-                # --- THE FIX STARTS HERE ---
-                # Force ID columns to be strings to avoid ArrowTypeError
-                df_base['hole_id'] = df_base['hole_id'].astype(str)
-                df_base['project_id'] = str(active_proj['project_id']) 
-                # ---------------------------
-
-                if 'design_z' not in df_base.columns:
-                    df_base['design_z'] = 0.0
+            if 'hole_id' in df_base.columns:
+                # CRITICAL: Strip whitespace but keep alphanumeric characters intact
+                df_base['hole_id'] = df_base['hole_id'].astype(str).str.strip()
                 
-                final_cols = ['project_id', 'hole_id', 'design_n', 'design_e', 'design_z']
-                df_to_upload = df_base[final_cols].copy()
+                required = ['hole_id', 'design_n', 'design_e']
+                if all(col in df_base.columns for col in required):
+                    df_base['project_id'] = str(active_proj['project_id'])
+                    
+                    if 'design_z' not in df_base.columns:
+                        df_base['design_z'] = 0.0
+                    
+                    final_cols = ['project_id', 'hole_id', 'design_n', 'design_e', 'design_z']
+                    df_to_upload = df_base[final_cols].copy()
 
-                st.write("✅ Data prepared for upload:")
-                st.dataframe(df_to_upload.head())
-                
-                if st.button("Confirm & Upload to BigQuery"):
-                    upload_to_bq(df_to_upload, "sensorpush-export.survey.holes")
-                    st.success(f"Uploaded {len(df_to_upload)} holes.")
-            else:
-                st.error(f"Missing columns: {missing}")
+                    st.write("✅ Label Check: IDs preserved exactly as strings.")
+                    st.dataframe(df_to_upload.head())
+                    
+                    if st.button("Confirm & Upload to BigQuery"):
+                        upload_to_bq(df_to_upload, "sensorpush-export.survey.holes")
+                        st.success(f"Uploaded {len(df_to_upload)} holes with preserved labels.")
+                else:
+                    st.error("Could not find Northing/Easting columns. Check for CADX/CADY.")
 
 #### Upload top survey ####
 
