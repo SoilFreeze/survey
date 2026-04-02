@@ -80,7 +80,13 @@ category = st.sidebar.selectbox("Category", ["Database Maintenance", "Visualizat
 # 4. DATABASE MAINTENANCE
 # ==========================================
 if category == "Database Maintenance":
-    action = st.radio("Action", ["Project Setup", "Upload Baseline", "Update Top Survey", "Upload Downhole", "Manage Data"], horizontal=True)   
+    # Adding a unique 'key' prevents the DuplicateElementId error
+    action = st.radio(
+        "Action", 
+        ["Project Setup", "Upload Baseline", "Update Top Survey", "Upload Downhole", "Manage Data"], 
+        horizontal=True,
+        key="db_maintenance_action" 
+    )
     
     # --- STEP 1: PROJECT SETUP ---
     if action == "Project Setup":
