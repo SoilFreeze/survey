@@ -77,99 +77,78 @@ else:
 category = st.sidebar.selectbox("Category", ["Database Maintenance", "Visualization", "Reports"])
 
 # ==========================================
-# 4. DATABASE MAINTENANCE
+# 4. DATABASE MAINTENANCE (MATCHED TO STANDARDS)
 # ==========================================
 if category == "Database Maintenance":
-    # Adding a unique 'key' prevents the DuplicateElementId error
     action = st.radio(
         "Action", 
         ["Project Setup", "Upload Baseline", "Update Top Survey", "Upload Downhole", "Manage Data"], 
         horizontal=True,
-        key="db_maintenance_action" 
+        key="db_maint_v2"
     )
-    
+
     # --- STEP 1: PROJECT SETUP ---
     if action == "Project Setup":
-        with st.form("new_proj"):
-            st.subheader("Configure New Project")
-            n_id = st.text_input("Project ID (e.g., BJ-2026)")
-            n_name = st.text_input("Project Name (e.g., Blackjack Creek)")
+        with st.form("new_proj_form"):
+            st.subheader("1. Setup New Project")
+            n_id = st.text_input("Project ID")
+            n_name = st.text_input("Project Name")
             n_len = st.number_input("Standard Pipe Length (ft)", value=100.0)
-            n_on = st.number_input("Origin Northing (Project 0,0)", format="%.3f")
-            n_oe = st.number_input("Origin Easting (Project 0,0)", format="%.3f")
-            n_type = st.selectbox("Default Pipe Type", ["Freeze Pipe", "Battered Freeze Pipe", "Temperature Pipe"])
-            
+            n_on = st.number_input("Origin Northing", format="%.3f")
+            n_oe = st.number_input("Origin Easting", format="%.3f")
             if st.form_submit_button("Save Project"):
-                new_df = pd.DataFrame([{
-                    'project_id': n_id, 
-                    'name': n_name, 
-                    'default_length': n_len, 
-                    'origin_north': n_on, 
-                    'origin_east': n_oe
-                }])
-                upload_to_bq(new_df, "sensorpush-export.survey.projects")
-                st.success(f"Project '{n_name}' created.")
+                df_new = pd.DataFrame([{'project_id':n_id, 'name':n_name, 'default_length':n_len, 'origin_north':n_on, 'origin_east':n_oe}])
+                upload_to_bq(df_new, "sensorpush-export.survey.projects")
+                st.success("Project Saved.")
                 st.rerun()
 
-    # --- ACTION: UPLOAD BASELINE (The 1,105-Hole Grid) ---
+    # --- STEP 2: UPLOAD BASELINE (1,105 GRID) ---
     elif action == "Upload Baseline":
-        st.subheader("Step 2: Upload Design Baseline")
-        file = st.file_uploader("Upload CSV", type=['csv'])
-        
+        st.subheader("2. Upload Baseline Grid")
+        file = st.file_uploader("Upload Baseline CSV", type=['csv'])
         if file and active_proj is not None:
             df_base = pd.read_csv(file)
             df_base.columns = [c.lower().strip() for c in df_base.columns]
             
-            # Map 'pipe' to 'hole_id' and other variations
+            # Map 'pipe' or 'id' to 'hole_id'
             rename_map = {
-                'pipe':'hole_id', 'id':'hole_id', 'name':'hole_id', 'hole':'hole_id',
-                'north':'design_n', 'northing':'design_n', 'east':'design_e', 'easting':'design_e',
-                'elev':'design_z', 'elevation':'design_z', 'type':'pipe_type', 'length':'design_length'
+                'pipe':'hole_id', 'id':'hole_id', 'hole':'hole_id',
+                'north':'design_n', 'east':'design_e', 'elev':'design_z',
+                'inc':'design_inc', 'az':'design_az', 'len':'design_length', 'length':'design_length'
             }
             df_base = df_base.rename(columns=rename_map)
             
-            # CLEANING: Drop any rows where the Pipe ID is missing
+            # Clean nulls
             df_base = df_base.dropna(subset=['hole_id'])
-            df_base = df_base[df_base['hole_id'].astype(str).str.strip() != ""]
-
-            # SCHEMA: Ensure all 10 columns exist for BigQuery
+            
+            # Force Schema
             db_schema = {
-                'project_id': str(active_proj['project_id']),
-                'hole_id': None,
-                'design_n': 0.0, 'design_e': 0.0, 'design_z': 0.0,
-                'phase': "Phase1", 'pipe_type': "Freeze Pipe",
-                'design_inc': 0.0, 'design_az': 0.0, 
+                'project_id': str(active_proj['project_id']), 'hole_id': None,
+                'design_n': 0.0, 'design_e': 0.0, 'design_z': 0.0, 'phase': "Phase1",
+                'pipe_type': "Freeze Pipe", 'design_inc': 0.0, 'design_az': 0.0, 
                 'design_length': active_proj.get('default_length', 100.0)
             }
-
             for col, default in db_schema.items():
-                if col not in df_base.columns:
-                    df_base[col] = default
+                if col not in df_base.columns: df_base[col] = default
 
-            st.success(f"✅ Ready to upload {len(df_base)} pipes.")
             st.dataframe(df_base[['hole_id', 'design_n', 'design_e', 'pipe_type']].head())
+            if st.button("🚀 Confirm Overwrite"):
+                p_id, ph = str(active_proj['project_id']), df_base['phase'].iloc[0]
+                client.query(f"DELETE FROM `sensorpush-export.survey.holes` WHERE project_id='{p_id}' AND phase='{ph}'").result()
+                upload_to_bq(df_base[list(db_schema.keys())], "sensorpush-export.survey.holes")
+                st.success("Grid Updated.")
 
-            if st.button("🚀 Confirm & Overwrite Phase"):
-                with st.spinner(f"Updating {len(df_base)} records..."):
-                    p_id = str(active_proj['project_id'])
-                    ph = df_base['phase'].iloc[0]
-                    client.query(f"DELETE FROM `sensorpush-export.survey.holes` WHERE project_id='{p_id}' AND phase='{ph}'").result()
-                    
-                    final_df = df_base[list(db_schema.keys())]
-                    upload_to_bq(final_df, "sensorpush-export.survey.holes")
-                    st.success("Baseline Updated.")
-                    st.rerun()
-
-    # --- ACTION: UPDATE TOP SURVEY (As-Built) ---
+    # --- STEP 3: UPDATE TOP SURVEY (AS-BUILT) ---
     elif action == "Update Top Survey":
-        st.subheader("Step 3: Update Actual Collar (As-Built)")
+        st.subheader("3. Sync As-Built Surface Surveys")
         top_file = st.file_uploader("Upload As-Built CSV", type=['csv'])
         if top_file and active_proj is not None:
             df_top = pd.read_csv(top_file)
             df_top.columns = [c.upper().strip() for c in df_top.columns]
+            # Mapping based on your 'As Built Survey.csv'
             df_top = df_top.rename(columns={'ID': 'hole_id', 'NORTHING': 'actual_n', 'EASTING': 'actual_e', 'ELEVATION': 'actual_z'})
             
-            if st.button("Apply As-Built Coordinates"):
+            if st.button("Apply Surface Coordinates"):
                 temp_id = f"sensorpush-export.survey.temp_top_{active_proj['project_id']}"
                 upload_to_bq(df_top, temp_id, write_mode="WRITE_TRUNCATE")
                 merge_q = f"""
@@ -179,123 +158,70 @@ if category == "Database Maintenance":
                 """
                 client.query(merge_q).result()
                 client.delete_table(temp_id)
-                st.success("Surface Surveys Synced.")
+                st.success("Surface As-Builts updated.")
 
-    # --- ACTION: UPLOAD DOWNHOLE (PROBE DATA) ---
+    # --- STEP 4: UPLOAD DOWNHOLE (PROBE DATA) ---
     elif action == "Upload Downhole":
-        st.subheader("Step 4: Upload Probe Data")
-        dh_file = st.file_uploader("Upload Downhole CSV", type=['csv'])
+        st.subheader("4. Upload Probe (Gyro) Data")
+        dh_file = st.file_uploader("Upload Probe CSV", type=['csv'])
         
         if dh_file and active_proj is not None:
-            # 1. Date Extraction from filename
+            # 1. Automatic Date from filename
             match = re.search(r'(\d{4})[.\-](\d{2})[.\-](\d{2})', dh_file.name)
             f_date = match.group(0).replace('.', '-') if match else datetime.now().strftime('%Y-%m-%d')
-            st.info(f"📅 Detected Survey Date: {f_date}")
+            st.info(f"📅 Identified Survey Date: {f_date}")
             
-            # 2. Clean and Map Headers
+            # 2. Normalize Headers to match your CSV: 'Hole', 'Length', etc.
             df_dh = pd.read_csv(dh_file)
             df_dh.columns = [c.lower().strip() for c in df_dh.columns]
             
-            # Expanded map to handle 'pipe', 'id', etc.
+            # 3. Explicit Mapping for your standard file format
             dh_map = {
-                'pipe': 'hole_id', 'id': 'hole_id', 'hole': 'hole_id',
-                'inc': 'inclination', 'az': 'azimuth', 'depth': 'depth'
+                'hole': 'hole_id', 
+                'length': 'depth',    # Mapping 'Length' to the database 'depth' column
+                'azimuth': 'azimuth', 
+                'inclination': 'inclination'
             }
             df_dh = df_dh.rename(columns=dh_map)
             
-            # 3. Validation
-            req_cols = ['hole_id', 'depth', 'azimuth', 'inclination']
-            missing = [c for c in req_cols if c not in df_dh.columns]
+            # 4. Data Cleanup
+            df_dh['project_id'] = str(active_proj['project_id'])
+            df_dh['survey_date'] = f_date
+            df_dh['hole_id'] = df_dh['hole_id'].astype(str).str.strip()
             
-            if not missing:
-                df_dh['project_id'] = str(active_proj['project_id'])
-                df_dh['survey_date'] = f_date
-                # Ensure Hole ID is a clean string
-                df_dh['hole_id'] = df_dh['hole_id'].astype(str).str.strip()
+            # Fill NaNs at surface (0ft) to prevent BigQuery errors
+            df_dh['azimuth'] = df_dh['azimuth'].fillna(0.0)
+            df_dh['inclination'] = df_dh['inclination'].fillna(0.0)
 
+            # Only columns BigQuery expects
+            final_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
+            
+            if 'hole_id' in df_dh.columns and 'depth' in df_dh.columns:
                 st.dataframe(df_dh[['hole_id', 'depth', 'azimuth', 'inclination']].head())
-
-                if st.button("🚀 Upload to Survey Table"):
+                
+                if st.button("🚀 Upload Probe Data"):
                     try:
-                        # ONLY send columns that exist in the BigQuery table
-                        final_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
                         upload_to_bq(df_dh[final_cols], "sensorpush-export.survey.surveys")
                         st.success(f"Successfully uploaded {len(df_dh)} points for {f_date}")
                     except Exception as e:
                         st.error(f"BigQuery Error: {e}")
-                        st.info("Check if you added the 'survey_date' column to the surveys table.")
             else:
-                st.error(f"CSV is missing columns: {', '.join(missing)}")
-                st.write("Found headers:", list(df_dh.columns))
+                st.error("Missing critical columns: 'Hole' or 'Length'")
 
-    # --- ACTION: MANAGE DATA (Danger Zone) ---
+    # --- STEP 5: MANAGE DATA ---
     elif action == "Manage Data":
-        st.subheader("🗑️ Data Cleanup")
+        st.subheader("5. Data Cleanup")
         with st.expander("⚠️ DANGER ZONE: Delete Project"):
-            confirm = st.text_input(f"Type '{active_proj['name']}' to confirm")
-            if st.button("DELETE PERMANENTLY"):
+            confirm = st.text_input(f"Type '{active_proj['name']}' to confirm deletion")
+            if st.button("DELETE PROJECT PERMANENTLY"):
                 if confirm == active_proj['name']:
                     p_id = active_proj['project_id']
                     client.query(f"DELETE FROM `sensorpush-export.survey.surveys` WHERE project_id='{p_id}'").result()
                     client.query(f"DELETE FROM `sensorpush-export.survey.holes` WHERE project_id='{p_id}'").result()
                     client.query(f"DELETE FROM `sensorpush-export.survey.projects` WHERE project_id='{p_id}'").result()
                     st.rerun()
-                        
-    # --- STEP 4: UPLOAD DOWNHOLE (HARDENED) ---
-    elif action == "Upload Downhole":
-        st.subheader("Step 4: Upload Downhole Survey")
-        dh_file = st.file_uploader("Upload Probe CSV", type=['csv'])
-        if dh_file and active_proj is not None:
-            file_date = get_file_date(dh_file.name)
-            df_dh = pd.read_csv(dh_file)
-            df_dh.columns = [c.lower().strip() for c in df_dh.columns]
-            
-            # Map headers
-            dh_map = {'id':'hole_id', 'hole':'hole_id', 'north':'n_dev', 'east':'e_dev'}
-            df_dh = df_dh.rename(columns=dh_map)
-            
-            # Standardize required columns for the Survey Table
-            df_dh['project_id'] = str(active_proj['project_id'])
-            df_dh['survey_date'] = file_date
-            
-            # Logic to ensure BigQuery gets exactly what it expects
-            survey_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
-            available = [c for c in survey_cols if c in df_dh.columns]
-            
-            if 'hole_id' in available and 'depth' in available:
-                if st.button("Upload Survey Data"):
-                    upload_to_bq(df_dh[available], "sensorpush-export.survey.surveys")
-                    st.success(f"Uploaded points for {file_date}")
-            else:
-                st.error("CSV must contain 'hole_id' and 'depth'.")
 
-    # --- STEP 5: MANAGE DATA (DELETION TOOLS) ---
-    elif action == "Manage Data":
-        st.subheader("🗑️ Data Cleanup")
-        
-        # DELETE PROJECT
-        with st.expander("⚠️ DANGER ZONE: Delete Entire Project"):
-            st.warning("This wipes ALL holes, surveys, and project settings.")
-            confirm = st.text_input(f"Type '{active_proj['name']}' to confirm")
-            if st.button("DELETE PERMANENTLY"):
-                if confirm == active_proj['name']:
-                    p_id = active_proj['project_id']
-                    client.query(f"DELETE FROM `sensorpush-export.survey.surveys` WHERE project_id='{p_id}'").result()
-                    client.query(f"DELETE FROM `sensorpush-export.survey.holes` WHERE project_id='{p_id}'").result()
-                    client.query(f"DELETE FROM `sensorpush-export.survey.projects` WHERE project_id='{p_id}'").result()
-                    st.success("Project deleted.")
-                    st.rerun()
 
-        # DELETE BY DATE
-        st.divider()
-        st.write("### Delete Surveys by Date")
-        date_q = f"SELECT DISTINCT survey_date FROM `sensorpush-export.survey.surveys` WHERE project_id='{active_proj['project_id']}'"
-        db_dates = run_query(date_q)
-        if not db_dates.empty:
-            target = st.selectbox("Select Date to Remove", db_dates['survey_date'].tolist())
-            if st.button("Wipe Selected Date"):
-                client.query(f"DELETE FROM `sensorpush-export.survey.surveys` WHERE survey_date='{target}' AND project_id='{active_proj['project_id']}'").result()
-                st.warning(f"All survey data for {target} has been removed.")
 # ==========================================
 # 5. VISUALIZATION
 # ==========================================
