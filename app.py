@@ -31,18 +31,15 @@ def upload_to_bq(df, table_id, write_mode="WRITE_APPEND"):
     return job.result()
     
 ##### Function Junction #####
-def physically_rename_headers(uploaded_file):
-    """
-    Acts as a filter: Opens the CSV, renames 'length' to 'depth',
-    and returns a clean DataFrame for the rest of the script.
-    """
-    # Load the raw data
+def physically_rename_and_export(uploaded_file):
+    # 1. Open the CSV
     df = pd.read_csv(uploaded_file)
     
-    # Create the renaming map
+    # 2. Create the physical rename map
     rename_map = {}
     for col in df.columns:
         c_low = col.lower().strip()
+        # The specific "Length to Depth" fix
         if 'length' in c_low:
             rename_map[col] = 'depth'
         elif 'hole' in c_low or 'pipe' in c_low:
@@ -52,8 +49,11 @@ def physically_rename_headers(uploaded_file):
         elif 'inc' in c_low:
             rename_map[col] = 'inclination'
             
-    # Return the modified DataFrame
-    return df.rename(columns=rename_map)
+    # 3. Apply the rename physically to the dataframe
+    df_fixed = df.rename(columns=rename_map)
+    
+    # 4. Convert back to CSV string for the download button
+    return df_fixed, df_fixed.to_csv(index=False).encode('utf-8')
     
 def get_smart_date(filename):
     # Specifically targets Month-Day-Year (e.g., 2-18-26)
@@ -240,48 +240,50 @@ if category == "Database Maintenance":
                 st.success("Surface As-Builts updated.")
 
     elif action == "Upload Downhole":
-        st.subheader("Step 4: Upload Probe Data")
+        st.subheader("Step 4: Physical File Fixer")
         dh_file = st.file_uploader("Upload Downhole CSV", type=['csv'])
         
-        if dh_file and active_proj is not None:
-            # 1. IMMEDIATE ACTION: Send to the renaming function
-            # From this point forward, the CSV "physically" has a depth column
-            df_processed = physically_rename_headers(dh_file)
+        if dh_file:
+            # 1. RUN THE PHYSICAL RENAME
+            df_processed, csv_data = physically_rename_and_export(dh_file)
             
-            # 2. GET DATE (Confirmed working)
+            # 2. SAVE BACK TO COMPUTER
+            # Since I cannot force-save to your drive, this button allows you to 
+            # save the "Depth" version immediately.
+            new_filename = dh_file.name.replace(".csv", "_FIXED_DEPTH.csv")
+            st.download_button(
+                label="💾 Save Fixed CSV to Computer",
+                data=csv_data,
+                file_name=new_filename,
+                mime='text/csv',
+            )
+            
+            st.divider()
+            
+            # 3. PROCEED WITH REST OF CODE
+            # Now the "Internal" version is already named depth
             f_date = get_smart_date(dh_file.name)
             st.info(f"📅 Detected Survey Date: **{f_date}**")
             
-            # 3. RUN THE REST OF THE CODE
-            # We now check for 'depth' which was created by the function above
             req_cols = ['hole_id', 'depth', 'azimuth', 'inclination']
-            missing = [c for c in req_cols if c not in df_processed.columns]
-            
-            if not missing:
-                # Add Metadata
+            if all(c in df_processed.columns for c in req_cols):
+                # Metadata
                 df_processed['project_id'] = str(active_proj['project_id'])
                 df_processed['survey_date'] = f_date
                 
-                # Numeric Cleanup to prevent BigQuery errors
-                for c in ['depth', 'azimuth', 'inclination']:
-                    df_processed[c] = pd.to_numeric(df_processed[c], errors='coerce').fillna(0.0)
-
-                st.success("✅ Function completed: Headers physically mapped to 'depth'.")
-                st.write("### Data Preview")
+                st.success("✅ Headers physically changed to 'depth' in memory.")
+                st.write("### New File Preview")
                 st.dataframe(df_processed[req_cols].head())
 
                 if st.button("🚀 Upload to BigQuery"):
-                    with st.spinner("Pushing to BigQuery..."):
-                        try:
-                            # Final column selection for BigQuery Schema
-                            final_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
-                            upload_to_bq(df_processed[final_cols], "sensorpush-export.survey.surveys")
-                            st.success(f"Success! {len(df_processed)} points uploaded.")
-                        except Exception as e:
-                            st.error(f"BigQuery Reject: {e}")
+                    try:
+                        final_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
+                        upload_to_bq(df_processed[final_cols], "sensorpush-export.survey.surveys")
+                        st.success("BigQuery Upload Successful.")
+                    except Exception as e:
+                        st.error(f"Upload failed: {e}")
             else:
-                st.error(f"Mapping failed. Even after processing, we are missing: {missing}")
-                st.write("Headers currently in memory:", list(df_processed.columns))
+                st.error(f"Mapping failed. Still missing: {set(req_cols) - set(df_processed.columns)}")
 
 
 # ==========================================
