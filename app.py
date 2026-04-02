@@ -106,51 +106,68 @@ if category == "Database Maintenance":
                 st.rerun()
 
     # --- STEP 2: UPLOAD BASELINE (PREVENTS DOUBLES) ---
-    elif action == "Upload Baseline":
+    if action == "Upload Baseline":
         st.subheader("Step 2: Upload Design Baseline")
         file = st.file_uploader("Upload CSV", type=['csv'])
         
         if file and active_proj is not None:
             df_base = pd.read_csv(file)
+            # Clean headers: "Hole ID" -> "hole id"
             df_base.columns = [c.lower().strip() for c in df_base.columns]
             
-            # Mapping
+            # 1. AGGRESSIVE MAPPING
             rename_map = {
-                'id':'hole_id', 'name':'hole_id', 'north':'design_n', 'east':'design_e', 
-                'elev':'design_z', 'inc':'design_inc', 'az':'design_az', 
-                'len':'design_length', 'length':'design_length', 'type':'pipe_type'
+                'id':'hole_id', 'name':'hole_id', 'hole':'hole_id', 'hole id':'hole_id', 'hole_id':'hole_id',
+                'north':'design_n', 'northing':'design_n', 'y':'design_n',
+                'east':'design_e', 'easting':'design_e', 'x':'design_e',
+                'elev':'design_z', 'elevation':'design_z', 'z':'design_z',
+                'inc':'design_inc', 'inclination':'design_inc',
+                'az':'design_az', 'azimuth':'design_az',
+                'len':'design_length', 'length':'design_length',
+                'type': 'pipe_type', 'kind': 'pipe_type'
             }
             df_base = df_base.rename(columns=rename_map)
             
-            # Inject defaults if missing from CSV
-            df_base['project_id'] = str(active_proj['project_id'])
-            if 'phase' not in df_base.columns: df_base['phase'] = "Phase1"
-            if 'pipe_type' not in df_base.columns: df_base['pipe_type'] = "Freeze Pipe"
-            if 'design_inc' not in df_base.columns: df_base['design_inc'] = 0.0
-            if 'design_az' not in df_base.columns: df_base['design_az'] = 0.0
-            if 'design_length' not in df_base.columns: df_base['design_length'] = active_proj.get('default_length', 100.0)
+            # 2. ENSURE ALL DB COLUMNS EXIST (Fills missing with defaults)
+            # This prevents the "missing in new schema" error from BigQuery
+            required_columns = {
+                'project_id': str(active_proj['project_id']),
+                'hole_id': None, # Must be in CSV
+                'design_n': 0.0,
+                'design_e': 0.0,
+                'design_z': 0.0,
+                'phase': "Phase1",
+                'pipe_type': "Freeze Pipe",
+                'design_inc': 0.0,
+                'design_az': 0.0,
+                'design_length': active_proj.get('default_length', 100.0)
+            }
 
-            if st.button("🚀 Confirm & Overwrite Phase"):
-                with st.spinner("Updating BigQuery..."):
-                    p_id = str(active_proj['project_id'])
-                    phase_name = df_base['phase'].iloc[0]
-                    
-                    # 1. Clean old data
-                    client.query(f"DELETE FROM `sensorpush-export.survey.holes` WHERE project_id = '{p_id}' AND phase = '{phase_name}'").result()
-                    
-                    # 2. Filter for DB-ready columns only
-                    # This list must match your BigQuery columns exactly
-                    db_columns = [
-                        'project_id', 'hole_id', 'design_n', 'design_e', 'design_z', 
-                        'phase', 'pipe_type', 'design_inc', 'design_az', 'design_length'
-                    ]
-                    final_df = df_base[[c for c in db_columns if c in df_base.columns]]
-                    
-                    try:
+            for col, default in required_columns.items():
+                if col not in df_base.columns:
+                    df_base[col] = default
+            
+            # 3. VERIFY HOLE_ID
+            if df_base['hole_id'].isnull().all():
+                st.error("❌ Could not find a 'Hole ID' or 'ID' column in your CSV. Please check your headers.")
+                st.write("Found columns:", list(df_base.columns))
+            else:
+                st.success(f"✅ Found {len(df_base)} holes. Ready for upload.")
+                st.dataframe(df_base[['hole_id', 'pipe_type', 'design_n', 'design_e']].head())
+
+                if st.button("🚀 Confirm & Overwrite Phase"):
+                    with st.spinner("Uploading to BigQuery..."):
+                        p_id = str(active_proj['project_id'])
+                        phase_name = df_base['phase'].iloc[0]
+                        
+                        # Wipe old data for this specific phase
+                        client.query(f"DELETE FROM `sensorpush-export.survey.holes` WHERE project_id = '{p_id}' AND phase = '{phase_name}'").result()
+                        
+                        # Force the exact column order the DB expects
+                        final_df = df_base[list(required_columns.keys())]
+                        
                         upload_to_bq(final_df, "sensorpush-export.survey.holes")
                         st.success(f"Baseline updated for {phase_name}")
-                    except Exception as e:
-                        st.error(f"Schema Error: Ensure you ran the ALTER TABLE SQL command. \n\n {e}")
 
     # --- STEP 3: UPDATE TOP SURVEY (AS-BUILT) ---
     elif action == "Update Top Survey":
@@ -182,36 +199,30 @@ if category == "Database Maintenance":
     # --- STEP 4: UPLOAD DOWNHOLE (HARDENED) ---
     elif action == "Upload Downhole":
         st.subheader("Step 4: Upload Downhole Survey")
-        dh_file = st.file_uploader("Upload Probe Data", type=['csv'])
-        
+        dh_file = st.file_uploader("Upload Probe CSV", type=['csv'])
         if dh_file and active_proj is not None:
             file_date = get_file_date(dh_file.name)
-            st.info(f"📅 Survey Date from filename: {file_date}")
-            
-            # Reset file buffer and clean headers
-            dh_file.seek(0)
             df_dh = pd.read_csv(dh_file)
             df_dh.columns = [c.lower().strip() for c in df_dh.columns]
             
-            # Map required columns
-            req = ['hole_id', 'depth', 'azimuth', 'inclination']
-            missing = [c for c in req if c not in df_dh.columns]
+            # Map headers
+            dh_map = {'id':'hole_id', 'hole':'hole_id', 'north':'n_dev', 'east':'e_dev'}
+            df_dh = df_dh.rename(columns=dh_map)
             
-            if not missing:
-                df_dh['project_id'] = str(active_proj['project_id'])
-                df_dh['survey_date'] = file_date
-                df_dh['hole_id'] = df_dh['hole_id'].astype(str).str.strip()
-                
-                if st.button("🚀 Upload to Database"):
-                    try:
-                        # Only push the specific columns BigQuery expects
-                        final_df = df_dh[['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']]
-                        upload_to_bq(final_df, "sensorpush-export.survey.surveys")
-                        st.success(f"Successfully uploaded {len(final_df)} data points.")
-                    except Exception as e:
-                        st.error(f"Upload Failed: {e}")
+            # Standardize required columns for the Survey Table
+            df_dh['project_id'] = str(active_proj['project_id'])
+            df_dh['survey_date'] = file_date
+            
+            # Logic to ensure BigQuery gets exactly what it expects
+            survey_cols = ['project_id', 'hole_id', 'depth', 'azimuth', 'inclination', 'survey_date']
+            available = [c for c in survey_cols if c in df_dh.columns]
+            
+            if 'hole_id' in available and 'depth' in available:
+                if st.button("Upload Survey Data"):
+                    upload_to_bq(df_dh[available], "sensorpush-export.survey.surveys")
+                    st.success(f"Uploaded points for {file_date}")
             else:
-                st.error(f"Missing columns: {', '.join(missing)}")
+                st.error("CSV must contain 'hole_id' and 'depth'.")
 
     # --- STEP 5: MANAGE DATA (DELETION TOOLS) ---
     elif action == "Manage Data":
