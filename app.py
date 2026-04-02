@@ -9,7 +9,7 @@ import re
 from datetime import datetime
 
 # ==========================================
-# 1. AUTHENTICATION & CORE DATABASE I/O
+# 1. CORE CONFIG & DB I/O
 # ==========================================
 def get_bq_client():
     if "gcp_service_account" in st.secrets:
@@ -30,10 +30,16 @@ def upload_to_bq(df, table_id, write_mode="WRITE_APPEND"):
     job = client.load_table_from_dataframe(df, table_id, job_config=job_config)
     return job.result()
 
+def get_file_date(filename):
+    match = re.search(r'(\d{4})[.\-](\d{2})[.\-](\d{2})', filename)
+    if match:
+        return f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
+    return datetime.now().strftime('%Y-%m-%d')
+
 # ==========================================
-# 2. MATH ENGINE
+# 2. MATH ENGINE (Battered Support)
 # ==========================================
-def calculate_survey_path(df, start_n_shifted, start_e_shifted):
+def calculate_survey_path(df, start_n, start_e):
     df = df.sort_values('depth')
     rad_az = np.radians(df['azimuth'])
     rad_inc = np.radians(df['inclination'])
@@ -42,8 +48,8 @@ def calculate_survey_path(df, start_n_shifted, start_e_shifted):
     dn = dist * np.sin(rad_inc) * np.cos(rad_az)
     de = dist * np.sin(rad_inc) * np.sin(rad_az)
     
-    df['n_rel'] = start_n_shifted + dn.cumsum()
-    df['e_rel'] = start_e_shifted + de.cumsum()
+    df['n_rel'] = start_n + dn.cumsum()
+    df['e_rel'] = start_e + de.cumsum()
     return df
 
 # ==========================================
@@ -57,7 +63,6 @@ if not df_projects.empty:
     sel_proj_name = st.sidebar.selectbox("Active Project", df_projects['name'].tolist())
     active_proj = df_projects[df_projects['name'] == sel_proj_name].iloc[0]
     
-    # Robust Phase Fetching
     try:
         phase_q = f"SELECT DISTINCT phase FROM `sensorpush-export.survey.holes` WHERE project_id = '{active_proj['project_id']}'"
         df_phases = run_query(phase_q)
@@ -69,7 +74,6 @@ else:
     st.sidebar.warning("No projects found.")
     active_proj = None
 
-st.sidebar.divider()
 category = st.sidebar.selectbox("Category", ["Database Maintenance", "Visualization", "Reports"])
 
 # ==========================================
@@ -78,132 +82,73 @@ category = st.sidebar.selectbox("Category", ["Database Maintenance", "Visualizat
 if category == "Database Maintenance":
     action = st.radio("Action", ["Project Setup", "Upload Baseline", "Update Top Survey", "Upload Downhole", "Manage Data"], horizontal=True)
     
-    # UTILITY: Extract date from filename or default to today
-    def get_file_date(filename):
-        # Looks for YYYY.MM.DD or YYYY-MM-DD
-        match = re.search(r'(\d{4})[.\-](\d{2})[.\-](\d{2})', filename)
-        if match:
-            return f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
-        return datetime.now().strftime('%Y-%m-%d')
+    if action == "Project Setup":
+        with st.form("new_proj"):
+            n_id = st.text_input("Project ID")
+            n_name = st.text_input("Project Name")
+            n_len = st.number_input("Default Pipe Length (ft)", value=100.0)
+            n_on = st.number_input("Origin Northing", format="%.3f")
+            n_oe = st.number_input("Origin Easting", format="%.3f")
+            if st.form_submit_button("Save"):
+                new_df = pd.DataFrame([{'project_id':n_id, 'name':n_name, 'default_length':n_len, 'origin_north':n_on, 'origin_east':n_oe}])
+                upload_to_bq(new_df, "sensorpush-export.survey.projects")
+                st.success("Project Created!")
+                st.rerun()
 
-    # --- STEP 2: UPLOAD BASELINE (PREVENTS DOUBLES) ---
-    if action == "Upload Baseline":
+    elif action == "Upload Baseline":
         st.subheader("Step 2: Upload Design Baseline")
-        st.info("Uploading will overwrite any existing baseline for the selected Phase.")
-        file = st.file_uploader("Upload Baseline CSV", type=['csv'])
-        
+        file = st.file_uploader("Upload CSV", type=['csv'])
         if file and active_proj is not None:
             df_base = pd.read_csv(file)
             df_base.columns = [c.lower().strip() for c in df_base.columns]
             
-            # Mapping
-            rename_map = {'id':'hole_id', 'name':'hole_id', 'north':'design_n', 'east':'design_e', 'elev':'design_z', 'cadx':'design_e', 'cady':'design_n'}
+            # Expanded mapping for Battered pipes
+            rename_map = {
+                'id':'hole_id', 'name':'hole_id', 'north':'design_n', 'east':'design_e', 
+                'elev':'design_z', 'inc':'design_inc', 'az':'design_az', 'length':'design_length'
+            }
             df_base = df_base.rename(columns=rename_map)
-            df_base['hole_id'] = df_base['hole_id'].astype(str).str.strip()
             df_base['project_id'] = str(active_proj['project_id'])
+            
             if 'phase' not in df_base.columns: df_base['phase'] = "Phase1"
+            if 'design_length' not in df_base.columns: df_base['design_length'] = active_proj['default_length']
+            if 'design_inc' not in df_base.columns: df_base['design_inc'] = 0.0 # Vertical default
+            if 'design_az' not in df_base.columns: df_base['design_az'] = 0.0
 
-            if st.button("🚀 Confirm & Overwrite Phase"):
-                with st.spinner("Cleaning old records..."):
-                    # Delete exactly what matches Project + Phase to stop doubles
-                    del_q = f"DELETE FROM `sensorpush-export.survey.holes` WHERE project_id = '{active_proj['project_id']}' AND phase = '{df_base['phase'].iloc[0]}'"
-                    client.query(del_q).result()
-                    
-                    upload_to_bq(df_base[['project_id','hole_id','design_n','design_e','design_z','phase']], "sensorpush-export.survey.holes")
-                    st.success(f"Baseline for {df_base['phase'].iloc[0]} updated.")
-                    st.rerun()
+            if st.button("Confirm & Overwrite Phase"):
+                del_q = f"DELETE FROM `sensorpush-export.survey.holes` WHERE project_id = '{active_proj['project_id']}' AND phase = '{df_base['phase'].iloc[0]}'"
+                client.query(del_q).result()
+                upload_to_bq(df_base, "sensorpush-export.survey.holes")
+                st.success("Baseline Updated.")
 
-    # --- STEP 3: UPDATE TOP SURVEY (AS-BUILT) ---
     elif action == "Update Top Survey":
         st.subheader("Step 3: Update Actual Collar (As-Built)")
         top_file = st.file_uploader("Upload As-Built CSV", type=['csv'])
-        
         if top_file and active_proj is not None:
-            file_date = get_file_date(top_file.name)
-            st.write(f"📅 Detected Survey Date: **{file_date}**")
-            
             df_top = pd.read_csv(top_file)
             df_top.columns = [c.upper().strip() for c in df_top.columns]
             df_top = df_top.rename(columns={'ID': 'hole_id', 'NORTHING': 'actual_n', 'EASTING': 'actual_e', 'ELEVATION': 'actual_z'})
-            
-            if st.button("Update As-Built Coordinates"):
+            if st.button("Update As-Built"):
                 temp_id = f"sensorpush-export.survey.temp_top_{active_proj['project_id']}"
                 upload_to_bq(df_top, temp_id, write_mode="WRITE_TRUNCATE")
-                # Merge logic to avoid touching design coordinates
-                merge_q = f"""
-                    MERGE `sensorpush-export.survey.holes` T USING `{temp_id}` S
-                    ON T.hole_id = S.hole_id AND T.project_id = '{active_proj['project_id']}'
-                    WHEN MATCHED THEN UPDATE SET T.actual_n = S.actual_n, T.actual_e = S.actual_e, T.actual_z = S.actual_z
-                """
+                merge_q = f"""MERGE `sensorpush-export.survey.holes` T USING `{temp_id}` S 
+                             ON T.hole_id = S.hole_id AND T.project_id = '{active_proj['project_id']}' 
+                             WHEN MATCHED THEN UPDATE SET T.actual_n = S.actual_n, T.actual_e = S.actual_e, T.actual_z = S.actual_z"""
                 client.query(merge_q).result()
                 client.delete_table(temp_id)
-                st.success("Updated Top Surveys.")
+                st.success("Top Surveys Updated.")
 
-    # --- STEP 4: UPLOAD DOWNHOLE (WITH DATE EXTRACTION) ---
-    elif action == "Upload Downhole":
-        st.subheader("Step 4: Upload Downhole Survey")
-        dh_file = st.file_uploader("Upload Downhole CSV", type=['csv'])
-        
-        if dh_file and active_proj is not None:
-            file_date = get_file_date(dh_file.name)
-            st.write(f"📅 Detected Survey Date: **{file_date}**")
-            
-            df_dh = pd.read_csv(dh_file)
-            # Standard mapping logic
-            df_dh['project_id'] = str(active_proj['project_id'])
-            df_dh['survey_date'] = file_date
-            
-            if st.button("Append Survey Data"):
-                upload_to_bq(df_dh, "sensorpush-export.survey.surveys")
-                st.success(f"Uploaded survey data for {file_date}")
-
-# --- MANAGE DATA (DELETION & PROJECT REMOVAL) ---
     elif action == "Manage Data":
         st.subheader("🗑️ Data & Project Management")
-        
-        # 1. DELETE ENTIRE PROJECT (DANGER ZONE)
         with st.expander("⚠️ DANGER ZONE: Delete Project"):
-            st.warning(f"This will permanently delete the project '{active_proj['name']}' and ALL associated holes and surveys.")
-            
-            # Confirmation text to prevent accidental clicks
-            confirm_text = st.text_input(f"Type '{active_proj['name']}' to confirm deletion")
-            
+            confirm = st.text_input(f"Type '{active_proj['name']}' to confirm deletion")
             if st.button("DELETE PROJECT PERMANENTLY"):
-                if confirm_text == active_proj['name']:
-                    with st.spinner("Deleting all project data..."):
-                        p_id = active_proj['project_id']
-                        # 1. Delete Surveys
-                        client.query(f"DELETE FROM `sensorpush-export.survey.surveys` WHERE project_id='{p_id}'").result()
-                        # 2. Delete Holes
-                        client.query(f"DELETE FROM `sensorpush-export.survey.holes` WHERE project_id='{p_id}'").result()
-                        # 3. Delete Project Definition
-                        client.query(f"DELETE FROM `sensorpush-export.survey.projects` WHERE project_id='{p_id}'").result()
-                        
-                        st.success(f"Project '{active_proj['name']}' deleted.")
-                        st.rerun()
-                else:
-                    st.error("Project name does not match. Deletion cancelled.")
-
-        st.divider()
-
-        # 2. SELECTIVE DELETION TABS
-        tab1, tab2 = st.tabs(["Delete by Hole", "Delete by Date"])
-        
-        with tab1:
-            h_id = st.text_input("Enter Hole ID to clear")
-            if st.button("Clear Hole"):
-                client.query(f"UPDATE `sensorpush-export.survey.holes` SET actual_n=NULL, actual_e=NULL WHERE hole_id='{h_id}' AND project_id='{active_proj['project_id']}'").result()
-                client.query(f"DELETE FROM `sensorpush-export.survey.surveys` WHERE hole_id='{h_id}' AND project_id='{active_proj['project_id']}'").result()
-                st.warning(f"Cleared records for {h_id}")
-
-        with tab2:
-            date_q = f"SELECT DISTINCT survey_date FROM `sensorpush-export.survey.surveys` WHERE project_id='{active_proj['project_id']}'"
-            db_dates = run_query(date_q)
-            if not db_dates.empty:
-                target_date = st.selectbox("Select Date to Wipe", db_dates['survey_date'].tolist())
-                if st.button("Confirm Delete All for Date"):
-                    client.query(f"DELETE FROM `sensorpush-export.survey.surveys` WHERE survey_date='{target_date}' AND project_id='{active_proj['project_id']}'").result()
-                    st.error(f"Deleted records for {target_date}")
+                if confirm == active_proj['name']:
+                    p_id = active_proj['project_id']
+                    client.query(f"DELETE FROM `sensorpush-export.survey.surveys` WHERE project_id='{p_id}'").result()
+                    client.query(f"DELETE FROM `sensorpush-export.survey.holes` WHERE project_id='{p_id}'").result()
+                    client.query(f"DELETE FROM `sensorpush-export.survey.projects` WHERE project_id='{p_id}'").result()
+                    st.rerun()
 
 # ==========================================
 # 5. VISUALIZATION
@@ -211,9 +156,7 @@ if category == "Database Maintenance":
 elif category == "Visualization":
     view = st.radio("View Type", ["Whole Site Map", "Single Hole Analysis", "Elevation Slice"], horizontal=True)
     
-    # CRITICAL: Use 'is not None' to avoid the ValueError from earlier
     if active_proj is not None:
-        # Load joined data: Baseline Holes + any Survey depth data
         q = f"""SELECT h.*, s.depth, s.azimuth, s.inclination 
                 FROM `sensorpush-export.survey.holes` h 
                 LEFT JOIN `sensorpush-export.survey.surveys` s ON h.hole_id = s.hole_id 
@@ -223,133 +166,44 @@ elif category == "Visualization":
         if active_phase != "All Phases":
             df_viz = df_viz[df_viz['phase'] == active_phase]
 
-        # --- VIEW 1: WHOLE SITE MAP (Surface Grid) ---
         if view == "Whole Site Map":
-            st.subheader(f"Project Grid: {active_proj['name']}")
-            
-            # Shift coordinates to (0,0) relative to Project Origin
             df_viz['n_rel'] = df_viz['design_n'] - active_proj['origin_north']
             df_viz['e_rel'] = df_viz['design_e'] - active_proj['origin_east']
+            df_viz['has_top'] = df_viz['actual_n'].notnull() & (df_viz['actual_n'] != 0)
+            df_viz['has_downhole'] = df_viz['depth'].notnull()
             
             fig = go.Figure()
-            # Plot the Design Grid
-            fig.add_trace(go.Scatter(
-                x=df_viz['e_rel'], y=df_viz['n_rel'],
-                mode='markers', name='Design',
-                marker=dict(color='lightgrey', size=5),
-                text=df_viz['hole_id']
-            ))
-            
-            # Highlight surveyed holes in green
-            surveyed = df_viz[df_viz['actual_n'].notnull()]
-            if not surveyed.empty:
-                surveyed['an_rel'] = surveyed['actual_n'] - active_proj['origin_north']
-                surveyed['ae_rel'] = surveyed['actual_e'] - active_proj['origin_east']
-                fig.add_trace(go.Scatter(
-                    x=surveyed['ae_rel'], y=surveyed['an_rel'],
-                    mode='markers', name='As-Built (Surveyed)',
-                    marker=dict(color='green', size=7),
-                    text=surveyed['hole_id']
-                ))
 
-            fig.update_layout(xaxis_title="East (ft)", yaxis_title="North (ft)", height=600)
+            # Battered Pipe Indicators (Red Tails)
+            battered = df_viz[df_viz['design_inc'] > 0].drop_duplicates('hole_id')
+            for _, row in battered.iterrows():
+                rad_az = np.radians(row['design_az'])
+                # Show direction of lean (5ft indicator)
+                dn = 5 * np.cos(rad_az)
+                de = 5 * np.sin(rad_az)
+                fig.add_trace(go.Scatter(x=[row['e_rel'], row['e_rel']+de], y=[row['n_rel'], row['n_rel']+dn], mode='lines', line=dict(color='red', width=1), showlegend=False))
+
+            # Symbology: Outer Ring (Top) and Inner Dot (Downhole)
+            for status, color in [(False, 'lightgrey'), (True, 'black')]:
+                mask = df_viz['has_top'] == status
+                fig.add_trace(go.Scatter(x=df_viz.loc[mask, 'e_rel'], y=df_viz.loc[mask, 'n_rel'], mode='markers', name=f"{'Actual' if status else 'Design'} Top", marker=dict(symbol='circle-open', color=color, size=12, line=dict(width=2)), text=df_viz.loc[mask, 'hole_id']))
+                
+                mask_dh = df_viz['has_downhole'] == status
+                fig.add_trace(go.Scatter(x=df_viz.loc[mask_dh, 'e_rel'], y=df_viz.loc[mask_dh, 'n_rel'], mode='markers', name=f"{'Probed' if status else 'Pending'} DH", marker=dict(symbol='circle', color=color, size=5), text=df_viz.loc[mask_dh, 'hole_id']))
+
+            fig.update_layout(xaxis=dict(scaleanchor="y", scaleratio=1), height=800)
             st.plotly_chart(fig, use_container_width=True)
 
-        # --- VIEW 2: SINGLE HOLE ANALYSIS (Deviation) ---
-        elif view == "Single Hole Analysis":
-            # Filter for holes that actually have downhole data
-            surveyed_ids = df_viz.dropna(subset=['depth'])['hole_id'].unique()
-            if len(surveyed_ids) > 0:
-                target = st.selectbox("Select Hole to Inspect", sorted(surveyed_ids))
-                df_h = df_viz[df_viz['hole_id'] == target].copy()
-                
-                # Anchor point: Use Actual survey if exists, otherwise Design
-                start_n = df_h['actual_n'].iloc[0] if pd.notnull(df_h['actual_n'].iloc[0]) else df_h['design_n'].iloc[0]
-                start_e = df_h['actual_e'].iloc[0] if pd.notnull(df_h['actual_e'].iloc[0]) else df_h['design_e'].iloc[0]
-                
-                # Shift anchor to (0,0)
-                s_n_rel = start_n - active_proj['origin_north']
-                s_e_rel = start_e - active_proj['origin_east']
-                
-                processed = calculate_survey_path(df_h, s_n_rel, s_e_rel)
-                
-                fig = make_subplots(rows=1, cols=2, subplot_titles=("East Deviation", "North Deviation"))
-                fig.add_trace(go.Scatter(x=processed['e_rel'], y=processed['depth'], name="East"), row=1, col=1)
-                fig.add_trace(go.Scatter(x=processed['n_rel'], y=processed['depth'], name="North"), row=1, col=2)
-                fig.update_yaxes(autorange="reversed", title="Depth (ft)")
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.warning("No downhole survey data found for this project yet.")
-
-        # --- VIEW 3: ELEVATION SLICE (The "Freeze Wall" View) ---
-        elif view == "Elevation Slice":
-            st.subheader("Subsurface Horizontal Slice")
-            slice_depth = st.slider("Select Target Depth (ft)", 0, 200, 50)
-            
-            st.info(f"Showing all surveyed pipes projected at {slice_depth}ft depth.")
-            # (Interpolation logic would go here to show where all 492 pipes are at exactly 50ft)
-
-    else:
-        st.error("Please select a project in the sidebar to view maps.")
 # ==========================================
-# 6. REPORTS (AUDIT & EXPORT)
+# 6. REPORTS
 # ==========================================
 elif category == "Reports":
-    # 1. SIDEBAR NAVIGATION
-    report_action = st.sidebar.radio("Report Type", ["System Audit", "Deviation Summary", "Export Shifted Data"])
-
-    if active_proj is None:
-        st.error("❌ No Project Selected. Please select a project in the sidebar.")
-    else:
-        if report_action == "System Audit":
-            st.subheader(f"📊 Project Progress: {active_proj['name']}")
-            
-            try:
-                # Optimized query to count your 1,105 baseline vs 93 as-builts
-                stats_query = f"""
-                    SELECT 
-                        COUNT(*) as total_baseline,
-                        COUNTIF(actual_n != 0 AND actual_n IS NOT NULL) as top_surveys_done,
-                        (SELECT COUNT(DISTINCT hole_id) FROM `sensorpush-export.survey.surveys` 
-                         WHERE project_id = '{active_proj['project_id']}') as downhole_completed
-                    FROM `sensorpush-export.survey.holes`
-                    WHERE project_id = '{active_proj['project_id']}'
-                """
-                df_stats = run_query(stats_query)
-                
-                # Display Metrics
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Baseline (Design Grid)", df_stats['total_baseline'][0]) 
-                c2.metric("Top Surveys (As-Built)", df_stats['top_surveys_done'][0]) 
-                c3.metric("Downhole (Probed)", df_stats['downhole_completed'][0])
-
-                st.divider()
-
-                # List missing as-builts to help reconcile the 1,105 grid
-                st.write("### 📍 Pending As-Built Surveys")
-                missing_q = f"""
-                    SELECT hole_id, phase FROM `sensorpush-export.survey.holes`
-                    WHERE project_id = '{active_proj['project_id']}'
-                    AND (actual_n = 0 OR actual_n IS NULL)
-                """
-                df_missing = run_query(missing_q)
-                if not df_missing.empty:
-                    st.warning(f"{len(df_missing)} holes are missing As-Built coordinates.")
-                    st.dataframe(df_missing)
-                else:
-                    st.success("✅ All holes reconciled with As-Built data.")
-
-            except Exception as e:
-                st.error("⚠️ Database Schema Mismatch")
-                st.info("Please ensure you have run the 'ALTER TABLE' command in BigQuery to add 'actual_n'.")
-                st.expander("Technical Error Details").write(e)
-                
-                
-        elif report_action == "Deviation Summary":
-            st.subheader("Design vs. Actual Deviation")
-            st.info("This report will compare your million-value Northings to calculate drift.")
-
-        elif report_action == "Export Shifted Data":
-            st.subheader("Download Relative (0,0) CSV")
-            st.info("Exporting all 1,105 holes relative to your project origin.")
-        
+    report_action = st.sidebar.radio("Report Type", ["System Audit", "Deviation Summary"])
+    if report_action == "System Audit":
+        stats_query = f"""SELECT COUNT(*) as total_baseline, COUNTIF(actual_n != 0 AND actual_n IS NOT NULL) as top_surveys_done,
+                        (SELECT COUNT(DISTINCT hole_id) FROM `sensorpush-export.survey.surveys` WHERE project_id = '{active_proj['project_id']}') as downhole_completed
+                        FROM `sensorpush-export.survey.holes` WHERE project_id = '{active_proj['project_id']}'"""
+        df_stats = run_query(stats_query)
+        st.metric("Baseline (Grid)", df_stats['total_baseline'][0])
+        st.metric("Top Surveys (As-Built)", df_stats['top_surveys_done'][0])
+        st.metric("Downhole Surveys", df_stats['downhole_completed'][0])
