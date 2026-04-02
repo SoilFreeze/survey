@@ -145,5 +145,41 @@ elif choice == "1. Create New Project":
 
 elif choice == "2. Upload Baseline":
     if active_proj is not None:
-        st.subheader(f"Upload Baseline for {active_proj['name']}")
-        # This will use active_proj['project_id'] to tag the data
+        st.subheader(f"Step 2: Import Design Baseline for {active_proj['name']}")
+        
+        # 1. Instructions and Template
+        st.info("Upload a CSV with these headers: hole_id, design_n, design_e, design_z")
+        
+        # 2. File Uploader
+        baseline_file = st.file_uploader("Choose Baseline CSV", type=['csv'])
+        
+        if baseline_file:
+            df_base = pd.read_csv(baseline_file)
+            
+            # Data Cleaning: Ensure column names match BigQuery schema
+            df_base.columns = [c.lower().strip() for c in df_base.columns]
+            
+            # Validation
+            required_cols = ['hole_id', 'design_n', 'design_e', 'design_z']
+            if all(col in df_base.columns for col in required_cols):
+                # Add the project_id to link these holes to the active project
+                df_base['project_id'] = active_proj['project_id']
+                
+                # Show preview
+                st.write("Preview of Design Data:", df_base.head())
+                
+                if st.button("Confirm & Upload to BigQuery"):
+                    with st.spinner("Writing to database..."):
+                        # We use WRITE_TRUNCATE if you want to overwrite, 
+                        # or WRITE_APPEND to add to existing
+                        job_config = bigquery.LoadJobConfig(write_disposition="WRITE_APPEND")
+                        
+                        try:
+                            upload_to_bq(df_base, "sensorpush-export.survey.holes")
+                            st.success(f"Successfully loaded {len(df_base)} holes for {active_proj['name']}.")
+                        except Exception as e:
+                            st.error(f"Error uploading: {e}")
+            else:
+                st.error(f"CSV missing columns. Required: {required_cols}")
+    else:
+        st.warning("Please select or create a project in the sidebar first.")
