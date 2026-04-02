@@ -106,7 +106,7 @@ if category == "Database Maintenance":
                 st.rerun()
 
     # --- STEP 2: UPLOAD BASELINE (PREVENTS DOUBLES) ---
-elif action == "Upload Baseline":
+    elif action == "Upload Baseline":
         st.subheader("Step 2: Upload Design Baseline")
         st.info("Uploading will overwrite the baseline for the selected Project and Phase.")
         file = st.file_uploader("Upload CSV", type=['csv'])
