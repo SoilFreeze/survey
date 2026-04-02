@@ -93,10 +93,69 @@ with st.sidebar:
 
 if choice == "Project Dashboard":
     if active_proj is not None:
-        st.subheader(f"Analysis: {active_proj['name']}")
-        # Visualizer logic goes here
+        st.subheader(f"📊 Analysis: {active_proj['name']}")
+        
+        # 1. FETCH DATA: Join Holes and Surveys for this project
+        query = f"""
+            SELECT 
+                h.hole_id, h.design_n, h.design_e, h.design_z,
+                s.depth, s.azimuth, s.inclination, s.survey_type
+            FROM `sensorpush-export.survey.holes` h
+            LEFT JOIN `sensorpush-export.survey.surveys` s ON h.hole_id = s.hole_id
+            WHERE h.project_id = '{active_proj['project_id']}'
+            ORDER BY h.hole_id, s.depth
+        """
+        df_all = run_query(query)
+
+        if not df_all.empty:
+            # 2. SELECT HOLE
+            hole_list = sorted(df_all['hole_id'].unique())
+            target_hole = st.selectbox("Select Pipe to Visualize", hole_list)
+            
+            # Filter data for the specific pipe
+            df_hole = df_all[df_all['hole_id'] == target_hole].copy()
+            
+            # 3. CALCULATE RELATIVE PATH (0,0 Shift)
+            # Use actual collar as start point, then subtract project origin
+            start_n = df_hole['design_n'].iloc[0] - active_proj['origin_north']
+            start_e = df_hole['design_e'].iloc[0] - active_proj['origin_east']
+            
+            # Calculate path using math_engine logic
+            processed = calculate_survey_path(df_hole, start_n, start_e)
+            
+            # 4. INTERACTIVE PLOTS
+            tab_plan, tab_profile = st.tabs(["Plan View", "Depth Profiles"])
+            
+            with tab_plan:
+                fig_plan = go.Figure()
+                # Design Start Point
+                fig_plan.add_trace(go.Scatter(x=[start_e], y=[start_n], mode='markers', 
+                                            marker=dict(size=12, symbol='x', color='red'), name='Collar'))
+                # Surveyed Path
+                fig_plan.add_trace(go.Scatter(x=processed['e_rel'], y=processed['n_rel'], 
+                                            mode='lines+markers', name='Pipe Path'))
+                
+                fig_plan.update_layout(title=f"Pipe {target_hole}: Plan View (Relative to 0,0)",
+                                      xaxis_title="East (ft)", yaxis_title="North (ft)",
+                                      yaxis=dict(scaleanchor="x", scaleratio=1))
+                st.plotly_chart(fig_plan, use_container_width=True)
+
+            with tab_profile:
+                fig_depth = make_subplots(rows=1, cols=2, subplot_titles=("East Dev", "North Dev"))
+                fig_depth.add_trace(go.Scatter(x=processed['e_rel'], y=processed['depth'], name="East"), row=1, col=1)
+                fig_depth.add_trace(go.Scatter(x=processed['n_rel'], y=processed['depth'], name="North"), row=1, col=2)
+                fig_depth.update_yaxes(autorange="reversed", title="Depth (ft)")
+                st.plotly_chart(fig_depth, use_container_width=True)
+
+            # 5. DOWNLOAD DATA
+            st.divider()
+            csv = processed.to_csv(index=False).encode('utf-8')
+            st.download_button(f"Download {target_hole} Transformed Data", data=csv, 
+                             file_name=f"{target_hole}_centered.csv")
+        else:
+            st.info("No data found for this project. Please complete Steps 2-4.")
     else:
-        st.error("Select or create a project first.")
+        st.error("Please select a project from the sidebar.")
 
 #### Create New Project ####
 
