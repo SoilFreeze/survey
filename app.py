@@ -5,6 +5,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from google.cloud import bigquery
 from google.oauth2 import service_account
+import re
+from datetime import datetime
 
 # ==========================================
 # 1. AUTHENTICATION & CORE DATABASE I/O
@@ -74,80 +76,109 @@ category = st.sidebar.selectbox("Category", ["Database Maintenance", "Visualizat
 # 4. DATABASE MAINTENANCE
 # ==========================================
 if category == "Database Maintenance":
-    # This line MUST run first so 'action' is defined
-    action = st.radio("Action", ["Project Setup", "Upload Baseline", "Update Top Survey", "Upload Downhole"], horizontal=True)
+    action = st.radio("Action", ["Project Setup", "Upload Baseline", "Update Top Survey", "Upload Downhole", "Manage Data"], horizontal=True)
     
-    if action == "Project Setup":
-        tab1, tab2 = st.tabs(["Create New", "Edit Origin"])
-        with tab1:
-            with st.form("new_proj"):
-                n_id = st.text_input("Project ID")
-                n_name = st.text_input("Project Name")
-                n_on = st.number_input("Origin Northing", format="%.3f")
-                n_oe = st.number_input("Origin Easting", format="%.3f")
-                if st.form_submit_button("Save"):
-                    upload_to_bq(pd.DataFrame([{'project_id':n_id, 'name':n_name, 'origin_north':n_on, 'origin_east':n_oe}]), "sensorpush-export.survey.projects")
-                    st.rerun()
-        with tab2:
-            if active_proj is not None:
-                u_on = st.number_input("Update Origin North", value=float(active_proj['origin_north']), format="%.3f")
-                u_oe = st.number_input("Update Origin East", value=float(active_proj['origin_east']), format="%.3f")
-                if st.button("Update Origin"):
-                    client.query(f"UPDATE `sensorpush-export.survey.projects` SET origin_north={u_on}, origin_east={u_oe} WHERE project_id='{active_proj['project_id']}'")
-                    st.rerun()
+    # UTILITY: Extract date from filename or default to today
+    def get_file_date(filename):
+        # Looks for YYYY.MM.DD or YYYY-MM-DD
+        match = re.search(r'(\d{4})[.\-](\d{2})[.\-](\d{2})', filename)
+        if match:
+            return f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
+        return datetime.now().strftime('%Y-%m-%d')
 
-    elif action == "Upload Baseline":
+    # --- STEP 2: UPLOAD BASELINE (PREVENTS DOUBLES) ---
+    if action == "Upload Baseline":
         st.subheader("Step 2: Upload Design Baseline")
+        st.info("Uploading will overwrite any existing baseline for the selected Phase.")
         file = st.file_uploader("Upload Baseline CSV", type=['csv'])
+        
         if file and active_proj is not None:
             df_base = pd.read_csv(file)
             df_base.columns = [c.lower().strip() for c in df_base.columns]
-            # Mapping and Defaults
+            
+            # Mapping
+            rename_map = {'id':'hole_id', 'name':'hole_id', 'north':'design_n', 'east':'design_e', 'elev':'design_z', 'cadx':'design_e', 'cady':'design_n'}
+            df_base = df_base.rename(columns=rename_map)
             df_base['hole_id'] = df_base['hole_id'].astype(str).str.strip()
             df_base['project_id'] = str(active_proj['project_id'])
             if 'phase' not in df_base.columns: df_base['phase'] = "Phase1"
-            
-            if st.button("Confirm Baseline Upload"):
-                # Clean Upgrade logic to prevent duplicates
-                delete_q = f"DELETE FROM `sensorpush-export.survey.holes` WHERE project_id = '{active_proj['project_id']}' AND phase = '{df_base['phase'].iloc[0]}'"
-                client.query(delete_q).result()
-                upload_to_bq(df_base, "sensorpush-export.survey.holes")
-                st.success("Baseline uploaded and old phase data cleared.")
 
+            if st.button("🚀 Confirm & Overwrite Phase"):
+                with st.spinner("Cleaning old records..."):
+                    # Delete exactly what matches Project + Phase to stop doubles
+                    del_q = f"DELETE FROM `sensorpush-export.survey.holes` WHERE project_id = '{active_proj['project_id']}' AND phase = '{df_base['phase'].iloc[0]}'"
+                    client.query(del_q).result()
+                    
+                    upload_to_bq(df_base[['project_id','hole_id','design_n','design_e','design_z','phase']], "sensorpush-export.survey.holes")
+                    st.success(f"Baseline for {df_base['phase'].iloc[0]} updated.")
+                    st.rerun()
+
+    # --- STEP 3: UPDATE TOP SURVEY (AS-BUILT) ---
     elif action == "Update Top Survey":
         st.subheader("Step 3: Update Actual Collar (As-Built)")
-        # This now handles your 93-hole survey file
         top_file = st.file_uploader("Upload As-Built CSV", type=['csv'])
+        
         if top_file and active_proj is not None:
+            file_date = get_file_date(top_file.name)
+            st.write(f"📅 Detected Survey Date: **{file_date}**")
+            
             df_top = pd.read_csv(top_file)
             df_top.columns = [c.upper().strip() for c in df_top.columns]
             df_top = df_top.rename(columns={'ID': 'hole_id', 'NORTHING': 'actual_n', 'EASTING': 'actual_e', 'ELEVATION': 'actual_z'})
-            df_top['hole_id'] = df_top['hole_id'].astype(str).str.strip()
-            df_top['project_id'] = str(active_proj['project_id'])
-
-            if st.button("🚀 Run As-Built Update"):
+            
+            if st.button("Update As-Built Coordinates"):
                 temp_id = f"sensorpush-export.survey.temp_top_{active_proj['project_id']}"
                 upload_to_bq(df_top, temp_id, write_mode="WRITE_TRUNCATE")
-                # Update 'actual' columns only to keep design 1105 grid intact
+                # Merge logic to avoid touching design coordinates
                 merge_q = f"""
                     MERGE `sensorpush-export.survey.holes` T USING `{temp_id}` S
-                    ON T.hole_id = S.hole_id AND T.project_id = S.project_id
+                    ON T.hole_id = S.hole_id AND T.project_id = '{active_proj['project_id']}'
                     WHEN MATCHED THEN UPDATE SET T.actual_n = S.actual_n, T.actual_e = S.actual_e, T.actual_z = S.actual_z
                 """
                 client.query(merge_q).result()
                 client.delete_table(temp_id)
-                st.success("Updated Top Survey coordinates for matching holes.")
+                st.success("Updated Top Surveys.")
 
+    # --- STEP 4: UPLOAD DOWNHOLE (WITH DATE EXTRACTION) ---
     elif action == "Upload Downhole":
         st.subheader("Step 4: Upload Downhole Survey")
         dh_file = st.file_uploader("Upload Downhole CSV", type=['csv'])
+        
         if dh_file and active_proj is not None:
+            file_date = get_file_date(dh_file.name)
+            st.write(f"📅 Detected Survey Date: **{file_date}**")
+            
             df_dh = pd.read_csv(dh_file)
-            df_dh['hole_id'] = df_dh['hole_id'].astype(str).str.strip()
+            # Standard mapping logic
             df_dh['project_id'] = str(active_proj['project_id'])
+            df_dh['survey_date'] = file_date
+            
             if st.button("Append Survey Data"):
                 upload_to_bq(df_dh, "sensorpush-export.survey.surveys")
-                st.success("Data Appended!")
+                st.success(f"Uploaded survey data for {file_date}")
+
+    # --- NEW: MANAGE DATA (DELETION TOOLS) ---
+    elif action == "Manage Data":
+        st.subheader("🗑️ Data Management")
+        tab1, tab2 = st.tabs(["Delete by Hole", "Delete by Date"])
+        
+        with tab1:
+            h_id = st.text_input("Hole ID to Clear")
+            if st.button("Clear Hole"):
+                # Reset actuals and delete surveys
+                client.query(f"UPDATE `sensorpush-export.survey.holes` SET actual_n=NULL, actual_e=NULL WHERE hole_id='{h_id}' AND project_id='{active_proj['project_id']}'")
+                client.query(f"DELETE FROM `sensorpush-export.survey.surveys` WHERE hole_id='{h_id}' AND project_id='{active_proj['project_id']}'")
+                st.warning(f"Data cleared for {h_id}")
+
+        with tab2:
+            # Fetch dates present in DB for easy selection
+            date_q = f"SELECT DISTINCT survey_date FROM `sensorpush-export.survey.surveys` WHERE project_id='{active_proj['project_id']}'"
+            db_dates = run_query(date_q)
+            if not db_dates.empty:
+                target_date = st.selectbox("Select Date to Wipe", db_dates['survey_date'].tolist())
+                if st.button("Confirm Delete All for Date"):
+                    client.query(f"DELETE FROM `sensorpush-export.survey.surveys` WHERE survey_date='{target_date}' AND project_id='{active_proj['project_id']}'")
+                    st.error(f"Deleted all records for {target_date}")
 
 # ==========================================
 # 5. VISUALIZATION
