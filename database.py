@@ -89,18 +89,20 @@ class ProjectDB:
         # Using a MERGE statement to UPSERT data into BigQuery
         query = f"""
             MERGE `{self.dataset_ref}.holes` T
-            USING (SELECT @project_id AS project_id, @id AS id, @clean_id AS clean_id, 
-                          @n AS n_base, @e AS e_base, @z AS z_base, 
-                          @n AS n_top, @e AS e_top, @z AS z_top, 
-                          0 AS has_top_survey, @az AS design_az, @inc AS design_inc, @len AS design_len) S
-            ON T.project_id = S.project_id AND T.id = S.id
+            USING (SELECT @project_id AS project_id, @hole_id AS hole_id, @clean_id AS clean_id, 
+                          @n AS design_n, @e AS design_e, @z AS design_z, 
+                          @n AS actual_n, @e AS actual_e, @z AS actual_z, 
+                          0 AS has_top_survey, @az AS design_az, @inc AS design_inc, @len AS design_length) S
+            ON T.project_id = S.project_id AND T.hole_id = S.hole_id
             WHEN MATCHED THEN
-                UPDATE SET n_base=S.n_base, e_base=S.e_base, z_base=S.z_base,
-                           n_top=S.n_top, e_top=S.e_top, z_top=S.z_top,
-                           design_az=S.design_az, design_inc=S.design_inc, design_len=S.design_len
+                UPDATE SET design_n=S.design_n, design_e=S.design_e, design_z=S.design_z,
+                           actual_n=S.actual_n, actual_e=S.actual_e, actual_z=S.actual_z,
+                           design_az=S.design_az, design_inc=S.design_inc, design_length=S.design_length
             WHEN NOT MATCHED THEN
-                INSERT (project_id, id, clean_id, n_base, e_base, z_base, n_top, e_top, z_top, has_top_survey, design_az, design_inc, design_len)
-                VALUES (S.project_id, S.id, S.clean_id, S.n_base, S.e_base, S.z_base, S.n_top, S.e_top, S.z_top, S.has_top_survey, S.design_az, S.design_inc, S.design_len)
+                INSERT (project_id, hole_id, clean_id, design_n, design_e, design_z, 
+                        actual_n, actual_e, actual_z, has_top_survey, design_az, design_inc, design_length)
+                VALUES (S.project_id, S.hole_id, S.clean_id, S.design_n, S.design_e, S.design_z, 
+                        S.actual_n, S.actual_e, S.actual_z, S.has_top_survey, S.design_az, S.design_inc, S.design_length)
         """
 
         for _, row in df.iterrows():
