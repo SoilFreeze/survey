@@ -78,29 +78,27 @@ with st.sidebar:
     st.header("Project Management")
     
     st.subheader("Open Existing Project")
-    db_file_path = st.text_input("Absolute path to .db file:")
-    if st.button("Load Project"):
-        if os.path.exists(db_file_path):
-            st.session_state.db.open_project(db_file_path)
-            st.session_state.project_loaded = True
-            st.session_state.db_path = db_file_path
-            st.success(f"Loaded: {os.path.basename(db_file_path)}")
-        else:
-            st.error("File not found.")
+    # Dynamically pull existing project names from BigQuery
+    available_projects = st.session_state.db.get_available_projects()
+    selected_project = st.selectbox("Select Project:", [""] + available_projects)
+    
+    if st.button("Load Project") and selected_project:
+        st.session_state.db.open_project(selected_project)
+        st.session_state.project_loaded = True
+        st.success(f"Loaded Project: {selected_project}")
 
     st.subheader("New Project")
     new_proj_name = st.text_input("Project Name:")
-    new_proj_dir = st.text_input("Directory to save project:")
     base_csv = st.file_uploader("Upload Baseline CSV", type=['csv'], key="base_upload")
     
-    if st.button("Create Project") and new_proj_name and new_proj_dir and base_csv:
+    if st.button("Create Project") and new_proj_name and base_csv:
         df_base = process_uploaded_csv(base_csv, ['North', 'East'])
         if df_base is not None:
-            db_path = st.session_state.db.create_new_project(new_proj_name, new_proj_dir)
+            # Note: folder path is no longer needed for BigQuery
+            st.session_state.db.create_new_project(new_proj_name)
             cnt = st.session_state.db.import_baseline(df_base)
-            st.session_state.db.open_project(db_path)
             st.session_state.project_loaded = True
-            st.success(f"Project created! Imported {cnt} baseline records.")
+            st.success(f"Project '{new_proj_name}' created! Imported {cnt} baseline records.")
 
 if not st.session_state.project_loaded:
     st.info("Please load or create a project from the sidebar to continue.")
