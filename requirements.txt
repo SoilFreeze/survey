@@ -1,7 +1,5 @@
 streamlit
-google-cloud-bigquery
-google-cloud-bigquery-storage
 pandas
-pandas-gbq
-plotly
-db-dtypes
+numpy
+scipy
+matplotlib
