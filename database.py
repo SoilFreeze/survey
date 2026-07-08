@@ -59,14 +59,16 @@ class ProjectDB:
         return True
 
     def get_available_projects(self):
+        """Fetches a list of all unique projects."""
+        # Ensure your table name is correct. If you created it as 'holes', 
+        # ensure it's referenced as `your_project.survey.holes`
         query = f"SELECT DISTINCT project_name FROM `{self.dataset_ref}.holes` ORDER BY project_name"
         try:
-            job = self.client.query(query)
-            df = job.to_dataframe()
+            df = self.client.query(query).to_dataframe()
             return df['project_name'].tolist()
         except Exception as e:
-            # This will print the specific BigQuery error to your Streamlit screen
-            st.error(f"BigQuery Error Details: {e}")
+            # If 'project_name' is not recognized, check your table schema in the GCP Console
+            st.error(f"BigQuery Query Error: {e}")
             return []
 
     def import_baseline(self, df):
