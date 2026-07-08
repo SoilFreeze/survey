@@ -38,10 +38,10 @@ if 'ColumnMappings' in config:
     if 'elevation_headers' in cm: z_defaults += [x.strip().lower() for x in cm['elevation_headers'].split(',')]
 
 col_map = {
-    'id': list(set(id_defaults)),
-    'n': list(set(n_defaults)),
-    'e': list(set(e_defaults)),
-    'z': list(set(z_defaults)),
+    'id': ["id", "hole_id", "holeid", "hole", "point", "name", "station", "loc", "pipe"],
+    'n': ["north", "northing", "n", "y", "northings", "n-coordinate", "y-coord", "cady", "cady"],
+    'e': ["east", "easting", "e", "x", "eastings", "e-coordinate", "x-coord", "cadx", "cadx"],
+    'z': ["elev", "elevation", "z", "rl", "level", "height", "el", "z-coord"],
     'az': ['azimuth', 'azi', 'az', 'dir', 'direction'],
     'inc': ['inclination', 'inc', 'dip', 'angle'],
     'depth': ['length', 'depth', 'dist', 'distance', 'md']
