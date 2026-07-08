@@ -55,26 +55,26 @@ class ProjectDB:
             return result.origin_north, result.origin_east
         return 0.0, 0.0 # Default origin if none specified
         
-    def create_new_project(self, project_name, folder_path=None):
+    def create_new_project(self, project_id, folder_path=None):
         """Sets the active project context (folder_path is ignored in BQ)"""
-        self.current_project = project_name
-        return project_name
+        self.current_project = project_id
+        return project_id
 
-    def open_project(self, project_name):
+    def open_project(self, project_id):
         """Sets the active project context."""
-        self.current_project = project_name
+        self.current_project = project_id
         return True
 
     def get_available_projects(self):
         """Fetches a list of all unique projects."""
         # Ensure your table name is correct. If you created it as 'holes', 
         # ensure it's referenced as `your_project.survey.holes`
-        query = f"SELECT DISTINCT project_name FROM `{self.dataset_ref}.holes` ORDER BY project_name"
+        query = f"SELECT DISTINCT project_id FROM `{self.dataset_ref}.holes` ORDER BY project_id"
         try:
             df = self.client.query(query).to_dataframe()
-            return df['project_name'].tolist()
+            return df['project_id'].tolist()
         except Exception as e:
-            # If 'project_name' is not recognized, check your table schema in the GCP Console
+            # If 'project_id' is not recognized, check your table schema in the GCP Console
             st.error(f"BigQuery Query Error: {e}")
             return []
 
@@ -89,18 +89,18 @@ class ProjectDB:
         # Using a MERGE statement to UPSERT data into BigQuery
         query = f"""
             MERGE `{self.dataset_ref}.holes` T
-            USING (SELECT @project_name AS project_name, @id AS id, @clean_id AS clean_id, 
+            USING (SELECT @project_id AS project_id, @id AS id, @clean_id AS clean_id, 
                           @n AS n_base, @e AS e_base, @z AS z_base, 
                           @n AS n_top, @e AS e_top, @z AS z_top, 
                           0 AS has_top_survey, @az AS design_az, @inc AS design_inc, @len AS design_len) S
-            ON T.project_name = S.project_name AND T.id = S.id
+            ON T.project_id = S.project_id AND T.id = S.id
             WHEN MATCHED THEN
                 UPDATE SET n_base=S.n_base, e_base=S.e_base, z_base=S.z_base,
                            n_top=S.n_top, e_top=S.e_top, z_top=S.z_top,
                            design_az=S.design_az, design_inc=S.design_inc, design_len=S.design_len
             WHEN NOT MATCHED THEN
-                INSERT (project_name, id, clean_id, n_base, e_base, z_base, n_top, e_top, z_top, has_top_survey, design_az, design_inc, design_len)
-                VALUES (S.project_name, S.id, S.clean_id, S.n_base, S.e_base, S.z_base, S.n_top, S.e_top, S.z_top, S.has_top_survey, S.design_az, S.design_inc, S.design_len)
+                INSERT (project_id, id, clean_id, n_base, e_base, z_base, n_top, e_top, z_top, has_top_survey, design_az, design_inc, design_len)
+                VALUES (S.project_id, S.id, S.clean_id, S.n_base, S.e_base, S.z_base, S.n_top, S.e_top, S.z_top, S.has_top_survey, S.design_az, S.design_inc, S.design_len)
         """
 
         for _, row in df.iterrows():
@@ -110,7 +110,7 @@ class ProjectDB:
 
             job_config = bigquery.QueryJobConfig(
                 query_parameters=[
-                    bigquery.ScalarQueryParameter("project_name", "STRING", self.current_project),
+                    bigquery.ScalarQueryParameter("project_id", "STRING", self.current_project),
                     bigquery.ScalarQueryParameter("id", "STRING", str(row['ID'])),
                     bigquery.ScalarQueryParameter("clean_id", "STRING", str(row['clean_ID'])),
                     bigquery.ScalarQueryParameter("n", "FLOAT64", float(row['North'])),
@@ -131,7 +131,7 @@ class ProjectDB:
         query = f"""
             UPDATE `{self.dataset_ref}.holes`
             SET n_top = @n, e_top = @e, z_top = @z, has_top_survey = 1
-            WHERE project_name = @project_name AND clean_id = @clean_id
+            WHERE project_id = @project_id AND clean_id = @clean_id
         """
         for _, row in df.iterrows():
             job_config = bigquery.QueryJobConfig(
@@ -139,7 +139,7 @@ class ProjectDB:
                     bigquery.ScalarQueryParameter("n", "FLOAT64", float(row['North'])),
                     bigquery.ScalarQueryParameter("e", "FLOAT64", float(row['East'])),
                     bigquery.ScalarQueryParameter("z", "FLOAT64", float(row['Elev'])),
-                    bigquery.ScalarQueryParameter("project_name", "STRING", self.current_project),
+                    bigquery.ScalarQueryParameter("project_id", "STRING", self.current_project),
                     bigquery.ScalarQueryParameter("clean_id", "STRING", str(row['clean_ID'])),
                 ]
             )
@@ -155,14 +155,14 @@ class ProjectDB:
         # 1. Clear existing data to prevent duplicates
         delete_query = f"""
             DELETE FROM `{self.dataset_ref}.downhole`
-            WHERE project_name = @project_name 
+            WHERE project_id = @project_id 
             AND survey_type = @survey_type 
             AND upload_date = @final_date
-            AND hole_id IN (SELECT id FROM `{self.dataset_ref}.holes` WHERE project_name = @project_name AND clean_id IN UNNEST(@ids))
+            AND hole_id IN (SELECT id FROM `{self.dataset_ref}.holes` WHERE project_id = @project_id AND clean_id IN UNNEST(@ids))
         """
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
-                bigquery.ScalarQueryParameter("project_name", "STRING", self.current_project),
+                bigquery.ScalarQueryParameter("project_id", "STRING", self.current_project),
                 bigquery.ScalarQueryParameter("survey_type", "STRING", survey_type),
                 bigquery.ScalarQueryParameter("final_date", "STRING", final_date),
                 bigquery.ArrayQueryParameter("ids", "STRING", ids),
@@ -171,8 +171,8 @@ class ProjectDB:
         self.client.query(delete_query, job_config=job_config).result()
 
         # 2. Fetch real IDs mapping
-        mapping_query = f"SELECT clean_id, id FROM `{self.dataset_ref}.holes` WHERE project_name = @project_name"
-        mapping_config = bigquery.QueryJobConfig(query_parameters=[bigquery.ScalarQueryParameter("project_name", "STRING", self.current_project)])
+        mapping_query = f"SELECT clean_id, id FROM `{self.dataset_ref}.holes` WHERE project_id = @project_id"
+        mapping_config = bigquery.QueryJobConfig(query_parameters=[bigquery.ScalarQueryParameter("project_id", "STRING", self.current_project)])
         mapping_df = self.client.query(mapping_query, job_config=mapping_config).to_dataframe()
         id_map = dict(zip(mapping_df['clean_id'], mapping_df['id']))
 
@@ -182,7 +182,7 @@ class ProjectDB:
             real_id = id_map.get(str(row['clean_ID']))
             if real_id:
                 upload_rows.append({
-                    "project_name": self.current_project,
+                    "project_id": self.current_project,
                     "hole_id": real_id,
                     "depth": float(row['Length']),
                     "azimuth": float(row['Azimuth']),
@@ -232,15 +232,15 @@ class ProjectDB:
             SELECT DISTINCT h.clean_id 
             FROM `{self.dataset_ref}.holes` h 
             JOIN `{self.dataset_ref}.downhole` d ON h.id = d.hole_id 
-            WHERE h.project_name = @project_name AND d.project_name = @project_name
+            WHERE h.project_id = @project_id AND d.project_id = @project_id
             ORDER BY h.clean_id
         """
-        job_config = bigquery.QueryJobConfig(query_parameters=[bigquery.ScalarQueryParameter("project_name", "STRING", self.current_project)])
+        job_config = bigquery.QueryJobConfig(query_parameters=[bigquery.ScalarQueryParameter("project_id", "STRING", self.current_project)])
         return [row[0] for row in self.client.query(query, job_config=job_config).result()]
 
     def get_available_dates(self):
         if not self.current_project: return []
-        query = f"SELECT DISTINCT upload_date FROM `{self.dataset_ref}.downhole` WHERE project_name = '{self.current_project}' AND upload_date IS NOT NULL ORDER BY upload_date DESC"
+        query = f"SELECT DISTINCT upload_date FROM `{self.dataset_ref}.downhole` WHERE project_id = '{self.current_project}' AND upload_date IS NOT NULL ORDER BY upload_date DESC"
         return [row[0] for row in self.client.query(query).result()]
 
     def get_holes_by_date(self, date_str):
@@ -249,11 +249,11 @@ class ProjectDB:
             SELECT DISTINCT h.clean_id 
             FROM `{self.dataset_ref}.holes` h 
             JOIN `{self.dataset_ref}.downhole` d ON h.id = d.hole_id 
-            WHERE h.project_name = @project_name AND d.project_name = @project_name AND d.upload_date = @date_str
+            WHERE h.project_id = @project_id AND d.project_id = @project_id AND d.upload_date = @date_str
             ORDER BY h.clean_id
         """
         job_config = bigquery.QueryJobConfig(query_parameters=[
-            bigquery.ScalarQueryParameter("project_name", "STRING", self.current_project),
+            bigquery.ScalarQueryParameter("project_id", "STRING", self.current_project),
             bigquery.ScalarQueryParameter("date_str", "STRING", date_str)
         ])
         return [row[0] for row in self.client.query(query, job_config=job_config).result()]
