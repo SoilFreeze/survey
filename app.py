@@ -153,19 +153,22 @@ with tab2:
         target_elev = st.number_input("Target Elevation for Maps", value=0.0)
 
     st.warning("Note: Visualizer currently uses `plt.show()`. Maps will open in a separate window on the host machine. (See modification notes below).")
+
+    origin_n, origin_e = st.session_state.db.get_project_origin(st.session_state.current_project)
+    holes, surveys = st.session_state.db.get_all_data()
     
     map_col1, map_col2, map_col3 = st.columns(3)
     with map_col1:
         if st.button("Generate Grid Map"):
             holes, surveys = st.session_state.db.get_all_data()
-            traj = st.session_state.math.calculate_trajectory(holes, surveys)
+            traj = st.session_state.math.calculate_trajectory(holes, surveys, origin_north=origin_n, origin_east=origin_e)
             res = st.session_state.math.get_slice_at_elevation(traj, target_elev)
             st.session_state.vis.generate_grid_heatmap(res, target_elev, grid_res if use_custom_grid else 0.2, var_filter, var_labels)
             
     with map_col2:
         if st.button("Generate Pipe Map"):
             holes, surveys = st.session_state.db.get_all_data()
-            traj = st.session_state.math.calculate_trajectory(holes, surveys)
+            traj = st.session_state.math.calculate_trajectory(holes, surveys, origin_north=origin_n, origin_east=origin_e)
             res = st.session_state.math.get_slice_at_elevation(traj, target_elev)
             st.session_state.vis.generate_pipe_heatmap(res, target_elev, var_filter, var_labels, var_map_mode)
 
