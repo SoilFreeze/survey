@@ -59,10 +59,15 @@ class ProjectDB:
         return True
 
     def get_available_projects(self):
-        """Fetches a list of all unique projects in the database."""
         query = f"SELECT DISTINCT project_name FROM `{self.dataset_ref}.holes` ORDER BY project_name"
-        df = self.client.query(query).to_dataframe()
-        return df['project_name'].tolist()
+        try:
+            job = self.client.query(query)
+            df = job.to_dataframe()
+            return df['project_name'].tolist()
+        except Exception as e:
+            # This will print the specific BigQuery error to your Streamlit screen
+            st.error(f"BigQuery Error Details: {e}")
+            return []
 
     def import_baseline(self, df):
         return self.update_baseline_safely(df)
