@@ -17,37 +17,44 @@ class ProjectDB:
         self._ensure_tables()
 
     def _ensure_tables(self):
-        """Creates the BigQuery tables if they don't exist."""
-        holes_schema = [
-            bigquery.SchemaField("project_name", "STRING"),
-            bigquery.SchemaField("id", "STRING"),
-            bigquery.SchemaField("clean_id", "STRING"),
-            bigquery.SchemaField("n_base", "FLOAT64"),
-            bigquery.SchemaField("e_base", "FLOAT64"),
-            bigquery.SchemaField("z_base", "FLOAT64"),
-            bigquery.SchemaField("n_top", "FLOAT64"),
-            bigquery.SchemaField("e_top", "FLOAT64"),
-            bigquery.SchemaField("z_top", "FLOAT64"),
-            bigquery.SchemaField("has_top_survey", "INT64"),
-            bigquery.SchemaField("design_az", "FLOAT64"),
-            bigquery.SchemaField("design_inc", "FLOAT64"),
-            bigquery.SchemaField("design_len", "FLOAT64"),
-        ]
-        holes_table = bigquery.Table(f"{self.dataset_ref}.holes", schema=holes_schema)
-        self.client.create_table(holes_table, exists_ok=True)
+        """Creates the tables exactly as your code expects them."""
+        # 1. Create Holes Table
+        holes_query = f"""
+        CREATE TABLE IF NOT EXISTS `{self.dataset_ref}.holes` (
+            id STRING, clean_id STRING, 
+            n_base FLOAT64, e_base FLOAT64, z_base FLOAT64,
+            n_top FLOAT64, e_top FLOAT64, z_top FLOAT64,
+            has_top_survey INT64, design_az FLOAT64, 
+            design_inc FLOAT64, design_len FLOAT64
+        )
+        """
+        self.client.query(holes_query).result()
 
-        downhole_schema = [
-            bigquery.SchemaField("project_name", "STRING"),
-            bigquery.SchemaField("hole_id", "STRING"),
-            bigquery.SchemaField("depth", "FLOAT64"),
-            bigquery.SchemaField("azimuth", "FLOAT64"),
-            bigquery.SchemaField("inclination", "FLOAT64"),
-            bigquery.SchemaField("survey_type", "STRING"),
-            bigquery.SchemaField("upload_date", "STRING"),
-        ]
-        downhole_table = bigquery.Table(f"{self.dataset_ref}.downhole", schema=downhole_schema)
-        self.client.create_table(downhole_table, exists_ok=True)
+        # 2. Create Downhole Table (matching your Python logic)
+        downhole_query = f"""
+        CREATE TABLE IF NOT EXISTS `{self.dataset_ref}.downhole` (
+            hole_id STRING, depth FLOAT64, 
+            azimuth FLOAT64, inclination FLOAT64, 
+            survey_type STRING, upload_date STRING
+        )
+        """
+        self.client.query(downhole_query).result()
 
+    def get_project_origin(self, project_id):
+        """Fetches the shift/origin for a specific project."""
+        query = f"""
+            SELECT origin_north, origin_east 
+            FROM `{self.dataset_ref}.projects` 
+            WHERE project_id = @project_id
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[bigquery.ScalarQueryParameter("project_id", "STRING", project_id)]
+        )
+        result = self.client.query(query, job_config=job_config).fetchone()
+        if result:
+            return result.origin_north, result.origin_east
+        return 0.0, 0.0 # Default origin if none specified
+        
     def create_new_project(self, project_name, folder_path=None):
         """Sets the active project context (folder_path is ignored in BQ)"""
         self.current_project = project_name
