@@ -292,4 +292,5 @@ class SurveyVisualizer:
         ax.set_xlabel("Easting"); ax.set_ylabel("Northing")
         ax.axis('equal'); ax.grid(True, linestyle=':', alpha=0.3)
         ax.legend(loc='upper right')
-        plt.tight_layout(); plt.show()
+        plt.tight_layout()
+        return fig
