@@ -10,9 +10,15 @@ from matplotlib.patches import Patch
 from matplotlib.lines import Line2D
 
 class SurveyVisualizer:
-    def __init__(self, config_file='config.ini'):
-        self.config = configparser.ConfigParser()
-        self.read_config(config_file)
+    def __init__(self):
+        # Define colors directly here
+        self.colors = {
+            'step_1': '#006400', 'step_2': '#008000', 'step_3': '#228B22',
+            'step_4': '#32CD32', 'step_5': '#90EE90', 'step_6': '#FFFFE0',
+            'step_7': '#FFFF00', 'step_8': '#FFD700', 'step_9': '#FFA500',
+            'step_10': '#FF8C00', 'step_11': '#FF4500', 'step_12': '#FF0000',
+            'step_13': '#800080'
+        }
 
     def read_config(self, config_file):
         import sys, os
@@ -52,7 +58,15 @@ class SurveyVisualizer:
         colors = []
         for i in range(1, 14):
             key = f'step_{i}'
+            # Use .get() to access the dictionary safely
+            # If self.colors is a configparser object, this works; 
+            # if it's a dict, this also works.
             val = self.colors.get(key, '#808080')
+            
+            # If val is a SectionProxy (from configparser), convert to string
+            if hasattr(val, '__getitem__'): 
+                val = str(val)
+                
             colors.append(self.fix_color(val))
         return ListedColormap(colors)
 
