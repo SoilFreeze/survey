@@ -194,8 +194,26 @@ class ProjectDB:
 
     def get_all_data(self):
         if not self.current_project: return pd.DataFrame(), pd.DataFrame()
-        holes_query = f"SELECT * FROM `{self.dataset_ref}.holes` WHERE project_name = '{self.current_project}'"
-        surveys_query = f"SELECT * FROM `{self.dataset_ref}.downhole` WHERE project_name = '{self.current_project}'"
+        
+        # Mapping your schema to what your math_engine expects
+        holes_query = f"""
+            SELECT 
+                hole_id AS id, 
+                hole_id AS clean_id, 
+                design_n AS n_base, design_e AS e_base, design_z AS z_base,
+                actual_n AS n_top, actual_e AS e_top, actual_z AS z_top,
+                design_inc, design_az, design_length AS design_len
+            FROM `{self.dataset_ref}.holes` 
+            WHERE project_id = '{self.current_project}'
+        """
+        
+        # Use your 'surveys' table for survey data
+        surveys_query = f"""
+            SELECT 
+                hole_id, length AS depth, azimuth, inclination, survey_type, upload_date
+            FROM `{self.dataset_ref}.surveys` 
+            WHERE project_id = '{self.current_project}'
+        """
         
         holes = self.client.query(holes_query).to_dataframe()
         surveys = self.client.query(surveys_query).to_dataframe()
