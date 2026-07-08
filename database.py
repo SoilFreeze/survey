@@ -84,36 +84,35 @@ class ProjectDB:
     def update_baseline_safely(self, df):
         if not self.current_project: return 0
         count = 0
-        has_az, has_inc, has_len = 'Azimuth' in df.columns, 'Inclination' in df.columns, 'Length' in df.columns
-
-        # Using a MERGE statement to UPSERT data into BigQuery
-        query = f"""
-            MERGE `{self.dataset_ref}.holes` T
-            USING (SELECT @project_id AS project_id, @hole_id AS hole_id, @clean_id AS clean_id, 
-                          @n AS design_n, @e AS design_e, @z AS design_z, 
-                          @n AS actual_n, @e AS actual_e, @z AS actual_z, 
-                          0 AS has_top_survey, @az AS design_az, @inc AS design_inc, @len AS design_length) S
-            ON T.project_id = S.project_id AND T.hole_id = S.hole_id
-            WHEN MATCHED THEN
-                UPDATE SET design_n=S.design_n, design_e=S.design_e, design_z=S.design_z,
-                           actual_n=S.actual_n, actual_e=S.actual_e, actual_z=S.actual_z,
-                           design_az=S.design_az, design_inc=S.design_inc, design_length=S.design_length
-            WHEN NOT MATCHED THEN
-                INSERT (project_id, hole_id, clean_id, design_n, design_e, design_z, 
-                        actual_n, actual_e, actual_z, has_top_survey, design_az, design_inc, design_length)
-                VALUES (S.project_id, S.hole_id, S.clean_id, S.design_n, S.design_e, S.design_z, 
-                        S.actual_n, S.actual_e, S.actual_z, S.has_top_survey, S.design_az, S.design_inc, S.design_length)
-        """
-
+        # Assuming your CSV columns are North/East/Elev/ID
         for _, row in df.iterrows():
-            d_az = float(row['Azimuth']) if has_az and pd.notna(row['Azimuth']) else 0.0
-            d_inc = float(row['Inclination']) if has_inc and pd.notna(row['Inclination']) else 0.0
-            d_len = float(row['Length']) if has_len and pd.notna(row['Length']) else 0.0
+            # Standardize defaults from your CSV
+            d_az = float(row.get('Azimuth', 0.0))
+            d_inc = float(row.get('Inclination', 0.0))
+            d_len = float(row.get('Length', 0.0))
 
+            query = f"""
+                MERGE `{self.dataset_ref}.holes` T
+                USING (SELECT @project_id AS project_id, @hole_id AS hole_id, @clean_id AS clean_id, 
+                              @n AS design_n, @e AS design_e, @z AS design_z, 
+                              @n AS actual_n, @e AS actual_e, @z AS actual_z, 
+                              0 AS has_top_survey, @az AS design_az, @inc AS design_inc, @len AS design_length) S
+                ON T.project_id = S.project_id AND T.hole_id = S.hole_id
+                WHEN MATCHED THEN
+                    UPDATE SET design_n=S.design_n, design_e=S.design_e, design_z=S.design_z,
+                               actual_n=S.actual_n, actual_e=S.actual_e, actual_z=S.actual_z,
+                               design_az=S.design_az, design_inc=S.design_inc, design_length=S.design_length
+                WHEN NOT MATCHED THEN
+                    INSERT (project_id, hole_id, clean_id, design_n, design_e, design_z, 
+                            actual_n, actual_e, actual_z, has_top_survey, design_az, design_inc, design_length)
+                    VALUES (S.project_id, S.hole_id, S.clean_id, S.design_n, S.design_e, S.design_z, 
+                            S.actual_n, S.actual_e, S.actual_z, S.has_top_survey, S.design_az, S.design_inc, S.design_length)
+            """
+            
             job_config = bigquery.QueryJobConfig(
                 query_parameters=[
                     bigquery.ScalarQueryParameter("project_id", "STRING", self.current_project),
-                    bigquery.ScalarQueryParameter("id", "STRING", str(row['ID'])),
+                    bigquery.ScalarQueryParameter("hole_id", "STRING", str(row['ID'])),
                     bigquery.ScalarQueryParameter("clean_id", "STRING", str(row['clean_ID'])),
                     bigquery.ScalarQueryParameter("n", "FLOAT64", float(row['North'])),
                     bigquery.ScalarQueryParameter("e", "FLOAT64", float(row['East'])),
