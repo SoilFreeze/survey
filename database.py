@@ -1,238 +1,227 @@
-import sqlite3
 import pandas as pd
-import os
 from datetime import datetime
+from google.cloud import bigquery
+import streamlit as st
 
 class ProjectDB:
     def __init__(self):
-        self.conn = None
-        self.db_path = None
+        # Authenticate using Streamlit Secrets
+        self.client = bigquery.Client.from_service_account_info(st.secrets["gcp_service_account"])
+        
+        # Define your BigQuery Project and Dataset here
+        self.project_id = st.secrets["gcp_service_account"]["project_id"]
+        self.dataset_id = st.secrets["bq"]["dataset"]
+        self.dataset_ref = f"{self.project_id}.{self.dataset_id}"
+        
+        self.current_project = None
+        self._ensure_tables()
 
-    def _ensure_connection(self):
-        if self.conn is None:
-            if self.db_path and os.path.exists(self.db_path):
-                try:
-                    self.conn = sqlite3.connect(self.db_path)
-                    self._check_schema()
-                except Exception as e:
-                    print(f"Database reconnection failed: {e}")
-            else:
-                return False
+    def _ensure_tables(self):
+        """Creates the BigQuery tables if they don't exist."""
+        holes_schema = [
+            bigquery.SchemaField("project_name", "STRING"),
+            bigquery.SchemaField("id", "STRING"),
+            bigquery.SchemaField("clean_id", "STRING"),
+            bigquery.SchemaField("n_base", "FLOAT64"),
+            bigquery.SchemaField("e_base", "FLOAT64"),
+            bigquery.SchemaField("z_base", "FLOAT64"),
+            bigquery.SchemaField("n_top", "FLOAT64"),
+            bigquery.SchemaField("e_top", "FLOAT64"),
+            bigquery.SchemaField("z_top", "FLOAT64"),
+            bigquery.SchemaField("has_top_survey", "INT64"),
+            bigquery.SchemaField("design_az", "FLOAT64"),
+            bigquery.SchemaField("design_inc", "FLOAT64"),
+            bigquery.SchemaField("design_len", "FLOAT64"),
+        ]
+        holes_table = bigquery.Table(f"{self.dataset_ref}.holes", schema=holes_schema)
+        self.client.create_table(holes_table, exists_ok=True)
+
+        downhole_schema = [
+            bigquery.SchemaField("project_name", "STRING"),
+            bigquery.SchemaField("hole_id", "STRING"),
+            bigquery.SchemaField("depth", "FLOAT64"),
+            bigquery.SchemaField("azimuth", "FLOAT64"),
+            bigquery.SchemaField("inclination", "FLOAT64"),
+            bigquery.SchemaField("survey_type", "STRING"),
+            bigquery.SchemaField("upload_date", "STRING"),
+        ]
+        downhole_table = bigquery.Table(f"{self.dataset_ref}.downhole", schema=downhole_schema)
+        self.client.create_table(downhole_table, exists_ok=True)
+
+    def create_new_project(self, project_name, folder_path=None):
+        """Sets the active project context (folder_path is ignored in BQ)"""
+        self.current_project = project_name
+        return project_name
+
+    def open_project(self, project_name):
+        """Sets the active project context."""
+        self.current_project = project_name
         return True
 
-    def _check_schema(self):
-        try:
-            cursor = self.conn.cursor()
-            # Ensure upload_date exists
-            cursor.execute("PRAGMA table_info(downhole)")
-            cols = [info[1] for info in cursor.fetchall()]
-            if 'upload_date' not in cols:
-                cursor.execute("ALTER TABLE downhole ADD COLUMN upload_date TEXT")
-            self.conn.commit()
-        except:
-            pass
-
-    def create_new_project(self, project_name, folder_path):
-        filename = f"{project_name.replace(' ', '_')}.db"
-        self.db_path = os.path.join(folder_path, filename)
-        self.conn = sqlite3.connect(self.db_path)
-        cursor = self.conn.cursor()
-        
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS holes (
-                id TEXT PRIMARY KEY,
-                clean_id TEXT,
-                n_base REAL, e_base REAL, z_base REAL,
-                n_top REAL, e_top REAL, z_top REAL,
-                has_top_survey INTEGER DEFAULT 0,
-                design_az REAL DEFAULT 0,
-                design_inc REAL DEFAULT 0,
-                design_len REAL DEFAULT 0
-            )
-        ''')
-        
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS downhole (
-                hole_id TEXT,
-                depth REAL,
-                azimuth REAL,
-                inclination REAL,
-                survey_type TEXT,
-                upload_date TEXT,
-                FOREIGN KEY(hole_id) REFERENCES holes(id)
-            )
-        ''')
-        self.conn.commit()
-        return self.db_path
-
-    def open_project(self, db_path):
-        self.db_path = db_path
-        self.conn = sqlite3.connect(db_path)
-        self._check_schema()
-        return True
+    def get_available_projects(self):
+        """Fetches a list of all unique projects in the database."""
+        query = f"SELECT DISTINCT project_name FROM `{self.dataset_ref}.holes` ORDER BY project_name"
+        df = self.client.query(query).to_dataframe()
+        return df['project_name'].tolist()
 
     def import_baseline(self, df):
-        if not self._ensure_connection(): return 0
-        cursor = self.conn.cursor()
-        count = 0
-        has_az, has_inc, has_len = 'Azimuth' in df.columns, 'Inclination' in df.columns, 'Length' in df.columns
-
-        for _, row in df.iterrows():
-            d_az = row['Azimuth'] if has_az and pd.notna(row['Azimuth']) else 0.0
-            d_inc = row['Inclination'] if has_inc and pd.notna(row['Inclination']) else 0.0
-            d_len = row['Length'] if has_len and pd.notna(row['Length']) else 0.0
-
-            cursor.execute('''
-                INSERT OR REPLACE INTO holes 
-                (id, clean_id, n_base, e_base, z_base, n_top, e_top, z_top, has_top_survey, design_az, design_inc, design_len)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
-            ''', (row['ID'], row['clean_ID'], row['North'], row['East'], row['Elev'], 
-                  row['North'], row['East'], row['Elev'],
-                  d_az, d_inc, d_len))
-            count += 1
-        self.conn.commit()
-        return count
+        return self.update_baseline_safely(df)
 
     def update_baseline_safely(self, df):
-        if not self._ensure_connection(): return 0
-        cursor = self.conn.cursor()
+        if not self.current_project: return 0
         count = 0
         has_az, has_inc, has_len = 'Azimuth' in df.columns, 'Inclination' in df.columns, 'Length' in df.columns
 
-        for _, row in df.iterrows():
-            d_az = row['Azimuth'] if has_az and pd.notna(row['Azimuth']) else 0.0
-            d_inc = row['Inclination'] if has_inc and pd.notna(row['Inclination']) else 0.0
-            d_len = row['Length'] if has_len and pd.notna(row['Length']) else 0.0
-            
-            cursor.execute("SELECT 1 FROM holes WHERE id=?", (row['ID'],))
-            exists = cursor.fetchone()
+        # Using a MERGE statement to UPSERT data into BigQuery
+        query = f"""
+            MERGE `{self.dataset_ref}.holes` T
+            USING (SELECT @project_name AS project_name, @id AS id, @clean_id AS clean_id, 
+                          @n AS n_base, @e AS e_base, @z AS z_base, 
+                          @n AS n_top, @e AS e_top, @z AS z_top, 
+                          0 AS has_top_survey, @az AS design_az, @inc AS design_inc, @len AS design_len) S
+            ON T.project_name = S.project_name AND T.id = S.id
+            WHEN MATCHED THEN
+                UPDATE SET n_base=S.n_base, e_base=S.e_base, z_base=S.z_base,
+                           n_top=S.n_top, e_top=S.e_top, z_top=S.z_top,
+                           design_az=S.design_az, design_inc=S.design_inc, design_len=S.design_len
+            WHEN NOT MATCHED THEN
+                INSERT (project_name, id, clean_id, n_base, e_base, z_base, n_top, e_top, z_top, has_top_survey, design_az, design_inc, design_len)
+                VALUES (S.project_name, S.id, S.clean_id, S.n_base, S.e_base, S.z_base, S.n_top, S.e_top, S.z_top, S.has_top_survey, S.design_az, S.design_inc, S.design_len)
+        """
 
-            if exists:
-                cursor.execute('''
-                    UPDATE holes 
-                    SET n_base=?, e_base=?, z_base=?, 
-                        n_top=?, e_top=?, z_top=?, 
-                        design_az=?, design_inc=?, design_len=?
-                    WHERE id=?
-                ''', (row['North'], row['East'], row['Elev'],
-                      row['North'], row['East'], row['Elev'], 
-                      d_az, d_inc, d_len, row['ID']))
-            else:
-                cursor.execute('''
-                    INSERT INTO holes 
-                    (id, clean_id, n_base, e_base, z_base, n_top, e_top, z_top, has_top_survey, design_az, design_inc, design_len)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
-                ''', (row['ID'], row['clean_ID'], row['North'], row['East'], row['Elev'], 
-                      row['North'], row['East'], row['Elev'],
-                      d_az, d_inc, d_len))
+        for _, row in df.iterrows():
+            d_az = float(row['Azimuth']) if has_az and pd.notna(row['Azimuth']) else 0.0
+            d_inc = float(row['Inclination']) if has_inc and pd.notna(row['Inclination']) else 0.0
+            d_len = float(row['Length']) if has_len and pd.notna(row['Length']) else 0.0
+
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("project_name", "STRING", self.current_project),
+                    bigquery.ScalarQueryParameter("id", "STRING", str(row['ID'])),
+                    bigquery.ScalarQueryParameter("clean_id", "STRING", str(row['clean_ID'])),
+                    bigquery.ScalarQueryParameter("n", "FLOAT64", float(row['North'])),
+                    bigquery.ScalarQueryParameter("e", "FLOAT64", float(row['East'])),
+                    bigquery.ScalarQueryParameter("z", "FLOAT64", float(row['Elev'])),
+                    bigquery.ScalarQueryParameter("az", "FLOAT64", d_az),
+                    bigquery.ScalarQueryParameter("inc", "FLOAT64", d_inc),
+                    bigquery.ScalarQueryParameter("len", "FLOAT64", d_len),
+                ]
+            )
+            self.client.query(query, job_config=job_config).result()
             count += 1
-        self.conn.commit()
         return count
 
     def update_top_survey(self, df):
-        if not self._ensure_connection(): return 0
-        cursor = self.conn.cursor()
+        if not self.current_project: return 0
         updated = 0
+        query = f"""
+            UPDATE `{self.dataset_ref}.holes`
+            SET n_top = @n, e_top = @e, z_top = @z, has_top_survey = 1
+            WHERE project_name = @project_name AND clean_id = @clean_id
+        """
         for _, row in df.iterrows():
-            cursor.execute('''
-                UPDATE holes SET n_top=?, e_top=?, z_top=?, has_top_survey=1 WHERE clean_id=?
-            ''', (row['North'], row['East'], row['Elev'], row['clean_ID']))
-            if cursor.rowcount > 0: updated += 1
-        self.conn.commit()
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("n", "FLOAT64", float(row['North'])),
+                    bigquery.ScalarQueryParameter("e", "FLOAT64", float(row['East'])),
+                    bigquery.ScalarQueryParameter("z", "FLOAT64", float(row['Elev'])),
+                    bigquery.ScalarQueryParameter("project_name", "STRING", self.current_project),
+                    bigquery.ScalarQueryParameter("clean_id", "STRING", str(row['clean_ID'])),
+                ]
+            )
+            res = self.client.query(query, job_config=job_config).result()
+            if res.num_dml_affected_rows > 0: updated += 1
         return updated
 
     def import_downhole(self, df, survey_type, date_override=None):
-        if not self._ensure_connection(): return 0
-        cursor = self.conn.cursor()
-        ids = df['clean_ID'].unique()
+        if not self.current_project: return 0
         final_date = date_override if date_override else datetime.now().strftime("%Y-%m-%d")
+        ids = df['clean_ID'].unique().tolist()
         
-        # Clear existing data for this specific batch to prevent duplicates
-        for hid in ids:
-            cursor.execute("""
-                DELETE FROM downhole 
-                WHERE hole_id IN (SELECT id FROM holes WHERE clean_id=?) 
-                AND survey_type=? AND upload_date=?
-            """, (hid, survey_type, final_date))
-            
-        inserted = 0
+        # 1. Clear existing data to prevent duplicates
+        delete_query = f"""
+            DELETE FROM `{self.dataset_ref}.downhole`
+            WHERE project_name = @project_name 
+            AND survey_type = @survey_type 
+            AND upload_date = @final_date
+            AND hole_id IN (SELECT id FROM `{self.dataset_ref}.holes` WHERE project_name = @project_name AND clean_id IN UNNEST(@ids))
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("project_name", "STRING", self.current_project),
+                bigquery.ScalarQueryParameter("survey_type", "STRING", survey_type),
+                bigquery.ScalarQueryParameter("final_date", "STRING", final_date),
+                bigquery.ArrayQueryParameter("ids", "STRING", ids),
+            ]
+        )
+        self.client.query(delete_query, job_config=job_config).result()
+
+        # 2. Fetch real IDs mapping
+        mapping_query = f"SELECT clean_id, id FROM `{self.dataset_ref}.holes` WHERE project_name = @project_name"
+        mapping_config = bigquery.QueryJobConfig(query_parameters=[bigquery.ScalarQueryParameter("project_name", "STRING", self.current_project)])
+        mapping_df = self.client.query(mapping_query, job_config=mapping_config).to_dataframe()
+        id_map = dict(zip(mapping_df['clean_id'], mapping_df['id']))
+
+        # 3. Prepare upload dataframe and push in bulk (much faster than row-by-row)
+        upload_rows = []
         for _, row in df.iterrows():
-            cursor.execute("SELECT id FROM holes WHERE clean_id=?", (row['clean_ID'],))
-            res = cursor.fetchone()
-            if res:
-                real_id = res[0]
-                cursor.execute('''
-                    INSERT INTO downhole (hole_id, depth, azimuth, inclination, survey_type, upload_date)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                ''', (real_id, row['Length'], row['Azimuth'], row['Inclination'], survey_type, final_date))
-                inserted += 1
-        self.conn.commit()
-        return inserted
+            real_id = id_map.get(str(row['clean_ID']))
+            if real_id:
+                upload_rows.append({
+                    "project_name": self.current_project,
+                    "hole_id": real_id,
+                    "depth": float(row['Length']),
+                    "azimuth": float(row['Azimuth']),
+                    "inclination": float(row['Inclination']),
+                    "survey_type": survey_type,
+                    "upload_date": final_date
+                })
+        
+        if upload_rows:
+            upload_df = pd.DataFrame(upload_rows)
+            # Load straight to BigQuery
+            job = self.client.load_table_from_dataframe(upload_df, f"{self.dataset_ref}.downhole")
+            job.result()
+            return len(upload_rows)
+        return 0
 
     def get_all_data(self):
-        if not self._ensure_connection(): return pd.DataFrame(), pd.DataFrame()
-        try:
-            holes = pd.read_sql("SELECT * FROM holes", self.conn)
-            surveys = pd.read_sql("SELECT * FROM downhole", self.conn)
-            return holes, surveys
-        except: return pd.DataFrame(), pd.DataFrame()
+        if not self.current_project: return pd.DataFrame(), pd.DataFrame()
+        holes_query = f"SELECT * FROM `{self.dataset_ref}.holes` WHERE project_name = '{self.current_project}'"
+        surveys_query = f"SELECT * FROM `{self.dataset_ref}.downhole` WHERE project_name = '{self.current_project}'"
+        
+        holes = self.client.query(holes_query).to_dataframe()
+        surveys = self.client.query(surveys_query).to_dataframe()
+        return holes, surveys
 
     def get_surveyed_ids(self):
-        if not self._ensure_connection(): return []
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT DISTINCT h.clean_id FROM holes h JOIN downhole d ON h.id = d.hole_id ORDER BY h.clean_id")
-        return [row[0] for row in cursor.fetchall()]
-
-    def get_available_dates(self):
-        if not self._ensure_connection(): return []
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT DISTINCT upload_date FROM downhole WHERE upload_date IS NOT NULL ORDER BY upload_date DESC")
-        return [row[0] for row in cursor.fetchall()]
-
-    def get_holes_by_date(self, date_str):
-        if not self._ensure_connection(): return []
-        query = """
+        if not self.current_project: return []
+        query = f"""
             SELECT DISTINCT h.clean_id 
-            FROM holes h 
-            JOIN downhole d ON h.id = d.hole_id 
-            WHERE d.upload_date = ?
+            FROM `{self.dataset_ref}.holes` h 
+            JOIN `{self.dataset_ref}.downhole` d ON h.id = d.hole_id 
+            WHERE h.project_name = @project_name AND d.project_name = @project_name
             ORDER BY h.clean_id
         """
-        cursor = self.conn.cursor()
-        cursor.execute(query, (date_str,))
-        return [row[0] for row in cursor.fetchall()]
+        job_config = bigquery.QueryJobConfig(query_parameters=[bigquery.ScalarQueryParameter("project_name", "STRING", self.current_project)])
+        return [row[0] for row in self.client.query(query, job_config=job_config).result()]
 
-    # --- NEW MANAGEMENT METHODS ---
-    def get_hole_survey_details(self, clean_id):
-        """Returns list of unique surveys [date, type, count] for a hole."""
-        if not self._ensure_connection(): return []
-        cursor = self.conn.cursor()
-        query = """
-            SELECT d.upload_date, d.survey_type, COUNT(*) 
-            FROM downhole d
-            JOIN holes h ON d.hole_id = h.id
-            WHERE h.clean_id = ?
-            GROUP BY d.upload_date, d.survey_type
-            ORDER BY d.upload_date DESC
+    def get_available_dates(self):
+        if not self.current_project: return []
+        query = f"SELECT DISTINCT upload_date FROM `{self.dataset_ref}.downhole` WHERE project_name = '{self.current_project}' AND upload_date IS NOT NULL ORDER BY upload_date DESC"
+        return [row[0] for row in self.client.query(query).result()]
+
+    def get_holes_by_date(self, date_str):
+        if not self.current_project: return []
+        query = f"""
+            SELECT DISTINCT h.clean_id 
+            FROM `{self.dataset_ref}.holes` h 
+            JOIN `{self.dataset_ref}.downhole` d ON h.id = d.hole_id 
+            WHERE h.project_name = @project_name AND d.project_name = @project_name AND d.upload_date = @date_str
+            ORDER BY h.clean_id
         """
-        cursor.execute(query, (clean_id,))
-        return [{'date': r[0], 'type': r[1], 'pts': r[2]} for r in cursor.fetchall()]
-
-    def delete_survey_entry(self, clean_id, date, survey_type):
-        """Deletes a specific survey run for a hole."""
-        if not self._ensure_connection(): return
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            DELETE FROM downhole 
-            WHERE hole_id IN (SELECT id FROM holes WHERE clean_id=?) 
-            AND upload_date=? AND survey_type=?
-        """, (clean_id, date, survey_type))
-        self.conn.commit()
-
-    def delete_batch_by_date(self, date_str):
-        """Deletes ALL surveys uploaded on a specific date."""
-        if not self._ensure_connection(): return 0
-        cursor = self.conn.cursor()
-        cursor.execute("DELETE FROM downhole WHERE upload_date=?", (date_str,))
-        self.conn.commit()
-        return cursor.rowcount
+        job_config = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter("project_name", "STRING", self.current_project),
+            bigquery.ScalarQueryParameter("date_str", "STRING", date_str)
+        ])
+        return [row[0] for row in self.client.query(query, job_config=job_config).result()]
