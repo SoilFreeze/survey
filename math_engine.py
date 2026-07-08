@@ -113,16 +113,17 @@ class SurveyMath:
             status = 'Baseline'
             d_az = hole_row.get('design_az', 0.0)
             d_inc = hole_row.get('design_inc', 0.0)
-            
-            path_n = start_n + np.cumsum(delta_n) - origin_north
-            path_e = start_e + np.cumsum(delta_e) - origin_east
-            
+                       
             active_survey = pd.DataFrame()
 
-            if not surveys_df.empty:
-                hs = surveys_df[surveys_df['hole_id'] == hole_id]
-                pipe = hs[hs['survey_type'] == 'Pipe']
-                casing = hs[hs['survey_type'] == 'Casing']
+            if not active_survey.empty:
+                group = active_survey.sort_values('depth')
+                path = self.calculate_tangential(
+                    hole_row['n_top'], hole_row['e_top'], hole_row['z_top'],
+                    group['depth'].values, np.radians(group['azimuth'].values), np.radians(group['inclination'].values),
+                    status, hole_id, hole_row['clean_id'], d_az, d_inc
+                )
+                full_paths.append(path)
                 
                 # Priority: Pipe (Latest) -> Casing (Latest) -> Baseline
                 if not pipe.empty:
@@ -156,7 +157,12 @@ class SurveyMath:
                 )
                 full_paths.append(path)
         if not full_paths: return pd.DataFrame()
-        return pd.concat(full_paths, ignore_index=True)
+        traj_df = pd.concat(full_paths, ignore_index=True)
+        
+        traj_df['north'] = traj_df['north'] - origin_north
+        traj_df['east'] = traj_df['east'] - origin_east
+        
+        return traj_df
 
     def get_slice_at_elevation(self, trajectory_df, target_z):
         results = []
