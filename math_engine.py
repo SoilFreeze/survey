@@ -114,6 +114,9 @@ class SurveyMath:
             d_az = hole_row.get('design_az', 0.0)
             d_inc = hole_row.get('design_inc', 0.0)
             
+            path_n = start_n + np.cumsum(delta_n) - origin_north
+            path_e = start_e + np.cumsum(delta_e) - origin_east
+            
             active_survey = pd.DataFrame()
 
             if not surveys_df.empty:
