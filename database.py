@@ -84,6 +84,34 @@ class ProjectDB:
             st.error(f"BigQuery Query Error: {e}")
             return []
 
+    def get_project_summary(self):
+        if not self.current_project: return None
+        
+        # Calculate all summary metrics in a single query for speed
+        query = f"""
+            SELECT 
+                (SELECT COUNT(DISTINCT hole_id) FROM `{self.dataset_ref}.holes` WHERE project_id = @project_id) as total_pipes,
+                (SELECT COUNT(DISTINCT hole_id) FROM `{self.dataset_ref}.holes` WHERE project_id = @project_id AND actual_n IS NOT NULL) as top_surveys,
+                (SELECT COUNT(DISTINCT hole_id) FROM `{self.dataset_ref}.surveys` WHERE project_id = @project_id) as downhole_surveys,
+                (SELECT MAX(CAST(upload_date AS STRING)) FROM `{self.dataset_ref}.surveys` WHERE project_id = @project_id) as last_update
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[bigquery.ScalarQueryParameter("project_id", "STRING", self.current_project)]
+        )
+        
+        job = self.client.query(query, job_config=job_config)
+        rows = list(job.result())
+        
+        if rows:
+            row = rows[0]
+            return {
+                "total_pipes": row.total_pipes or 0,
+                "top_surveys": row.top_surveys or 0,
+                "downhole_surveys": row.downhole_surveys or 0,
+                "last_update": row.last_update or "No Data"
+            }
+        return None
+    
     def import_baseline(self, df):
         return self.update_baseline_safely(df)
 
