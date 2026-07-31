@@ -3,6 +3,7 @@ import pandas as pd
 import os
 import configparser
 from datetime import datetime
+import re
 
 from database import ProjectDB
 from math_engine import SurveyMath
@@ -108,6 +109,7 @@ if not st.session_state.project_loaded:
 tab1, tab2, tab3, tab4 = st.tabs(["Data & Analysis", "Map Visualization", "QC & Single Hole", "Batch Reporting"])
 
 # --- TAB 1: Data & Analysis ---
+# --- TAB 1: Data & Analysis ---
 with tab1:
     st.header("Import Data")
     col1, col2, col3 = st.columns(3)
@@ -121,23 +123,44 @@ with tab1:
                 st.success(f"Updated {cnt} top surveys.")
 
     with col2:
-        casing_csv = st.file_uploader("2a. Import CASING", type=['csv'])
-        casing_date = st.date_input("Casing Upload Date")
-        if casing_csv and st.button("Process CASING"):
-            df = process_uploaded_csv(casing_csv, ['Length', 'Azimuth', 'Inclination'])
-            if df is not None:
-                cnt = st.session_state.db.import_downhole(df, 'Casing', casing_date.strftime("%Y-%m-%d"))
-                st.success(f"Imported {cnt} Casing records.")
+        # Upgraded to accept multiple files
+        casing_csvs = st.file_uploader("2a. Import CASING (Batch)", type=['csv'], accept_multiple_files=True)
+        casing_fallback_date = st.date_input("Fallback Casing Date")
+        
+        if casing_csvs and st.button("Process CASING Batch"):
+            total_cnt = 0
+            with st.spinner("Processing Casing files..."):
+                for csv_file in casing_csvs:
+                    df = process_uploaded_csv(csv_file, ['Length', 'Azimuth', 'Inclination'])
+                    if df is not None:
+                        # Extract YYYY-MM-DD from the file name
+                        match = re.search(r'\d{4}-\d{2}-\d{2}', csv_file.name)
+                        file_date = match.group(0) if match else casing_fallback_date.strftime("%Y-%m-%d")
+                        
+                        cnt = st.session_state.db.import_downhole(df, 'Casing', file_date)
+                        total_cnt += cnt
+                        
+            st.success(f"Imported {total_cnt} Casing records across {len(casing_csvs)} files.")
 
     with col3:
-        pipe_csv = st.file_uploader("2b. Import PIPE", type=['csv'])
-        pipe_date = st.date_input("Pipe Upload Date")
-        if pipe_csv and st.button("Process PIPE"):
-            df = process_uploaded_csv(pipe_csv, ['Length', 'Azimuth', 'Inclination'])
-            if df is not None:
-                cnt = st.session_state.db.import_downhole(df, 'Pipe', pipe_date.strftime("%Y-%m-%d"))
-                st.success(f"Imported {cnt} Pipe records.")
-
+        # Upgraded to accept multiple files
+        pipe_csvs = st.file_uploader("2b. Import PIPE (Batch)", type=['csv'], accept_multiple_files=True)
+        pipe_fallback_date = st.date_input("Fallback Pipe Date")
+        
+        if pipe_csvs and st.button("Process PIPE Batch"):
+            total_cnt = 0
+            with st.spinner("Processing Pipe files..."):
+                for csv_file in pipe_csvs:
+                    df = process_uploaded_csv(csv_file, ['Length', 'Azimuth', 'Inclination'])
+                    if df is not None:
+                        # Extract YYYY-MM-DD from the file name
+                        match = re.search(r'\d{4}-\d{2}-\d{2}', csv_file.name)
+                        file_date = match.group(0) if match else pipe_fallback_date.strftime("%Y-%m-%d")
+                        
+                        cnt = st.session_state.db.import_downhole(df, 'Pipe', file_date)
+                        total_cnt += cnt
+                        
+            st.success(f"Imported {total_cnt} Pipe records across {len(pipe_csvs)} files.")
 # --- TAB 2: Map Visualization ---
 with tab2:
     st.header("Map Visualization Options")
