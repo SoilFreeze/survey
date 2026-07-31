@@ -106,30 +106,29 @@ class SurveyMath:
         return pd.concat(paths, ignore_index=True)
 
     # --- SIMPLIFIED: Uses LATEST Pipe Survey for Calculations ---
-    def calculate_trajectory(self, holes_df, surveys_df):
+    def calculate_trajectory(self, holes_df, surveys_df, origin_north=0.0, origin_east=0.0):
         full_paths = []
         for _, hole_row in holes_df.iterrows():
             hole_id = hole_row['id']
             status = 'Baseline'
             d_az = hole_row.get('design_az', 0.0)
             d_inc = hole_row.get('design_inc', 0.0)
-                       
+            
+            # Filter surveys for this specific hole
+            hole_surveys = pd.DataFrame()
+            if not surveys_df.empty:
+                hole_surveys = surveys_df[surveys_df['hole_id'] == hole_id]
+                
             active_survey = pd.DataFrame()
 
-            if not active_survey.empty:
-                group = active_survey.sort_values('depth')
-                path = self.calculate_tangential(
-                    hole_row['n_top'], hole_row['e_top'], hole_row['z_top'],
-                    group['depth'].values, np.radians(group['azimuth'].values), np.radians(group['inclination'].values),
-                    status, hole_id, hole_row['clean_id'], d_az, d_inc
-                )
-                full_paths.append(path)
+            if not hole_surveys.empty:
+                pipe = hole_surveys[hole_surveys['survey_type'] == 'Pipe']
+                casing = hole_surveys[hole_surveys['survey_type'] == 'Casing']
                 
                 # Priority: Pipe (Latest) -> Casing (Latest) -> Baseline
                 if not pipe.empty:
                     pipe = pipe.copy()
                     pipe['upload_date'] = pipe['upload_date'].fillna('Unknown')
-                    # Sort dates to get latest
                     dates = sorted(pipe['upload_date'].unique())
                     active_survey = pipe[pipe['upload_date'] == dates[-1]]
                     status = 'Pipe'
@@ -156,9 +155,11 @@ class SurveyMath:
                     'Baseline', hole_id, hole_row['clean_id'], d_az, d_inc
                 )
                 full_paths.append(path)
+                
         if not full_paths: return pd.DataFrame()
         traj_df = pd.concat(full_paths, ignore_index=True)
         
+        # Apply origin shifts using the passed parameters
         traj_df['north'] = traj_df['north'] - origin_north
         traj_df['east'] = traj_df['east'] - origin_east
         
