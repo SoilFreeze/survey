@@ -121,15 +121,35 @@ class SurveyMath:
                 
             active_survey = pd.DataFrame()
 
+            # Check for Pipe or Casing surveys
+            if not hole_surveys.empty:
+                pipe = hole_surveys[hole_surveys['survey_type'] == 'Pipe']
+                casing = hole_surveys[hole_surveys['survey_type'] == 'Casing']
+                
+                # Priority: Pipe (Latest) -> Casing (Latest) -> Baseline
+                if not pipe.empty:
+                    pipe = pipe.copy()
+                    pipe['upload_date'] = pipe['upload_date'].fillna('Unknown')
+                    dates = sorted(pipe['upload_date'].unique())
+                    active_survey = pipe[pipe['upload_date'] == dates[-1]]
+                    status = 'Pipe'
+                elif not casing.empty:
+                    casing = casing.copy()
+                    casing['upload_date'] = casing['upload_date'].fillna('Unknown')
+                    dates = sorted(casing['upload_date'].unique())
+                    active_survey = casing[casing['upload_date'] == dates[-1]]
+                    status = 'Casing'
+
             # --- NEW: Fallback to design coordinates if top survey is missing ---
             n_start = hole_row['n_top'] if pd.notna(hole_row['n_top']) else hole_row['n_base']
             e_start = hole_row['e_top'] if pd.notna(hole_row['e_top']) else hole_row['e_base']
             z_start = hole_row['z_top'] if pd.notna(hole_row['z_top']) else hole_row['z_base']
 
+            # Generate the trajectory
             if not active_survey.empty:
                 group = active_survey.sort_values('depth')
                 path = self.calculate_tangential(
-                    n_start, e_start, z_start,  # <-- Updated here
+                    n_start, e_start, z_start,
                     group['depth'].values, np.radians(group['azimuth'].values), np.radians(group['inclination'].values),
                     status, hole_id, hole_row['clean_id'], d_az, d_inc
                 )
@@ -137,15 +157,7 @@ class SurveyMath:
             else:
                 d_len = hole_row.get('design_len', 200.0) or 200.0
                 path = self.calculate_tangential(
-                    n_start, e_start, z_start,  # <-- Updated here too
-                    np.array([d_len]), np.array([np.radians(d_az)]), np.array([np.radians(d_inc)]),
-                    'Baseline', hole_id, hole_row['clean_id'], d_az, d_inc
-                )
-                full_paths.append(path)
-            else:
-                d_len = hole_row.get('design_len', 200.0) or 200.0
-                path = self.calculate_tangential(
-                    hole_row['n_top'], hole_row['e_top'], hole_row['z_top'],
+                    n_start, e_start, z_start,
                     np.array([d_len]), np.array([np.radians(d_az)]), np.array([np.radians(d_inc)]),
                     'Baseline', hole_id, hole_row['clean_id'], d_az, d_inc
                 )
@@ -159,7 +171,6 @@ class SurveyMath:
         traj_df['east'] = traj_df['east'] - origin_east
         
         return traj_df
-
     def get_slice_at_elevation(self, trajectory_df, target_z):
         results = []
         grouped = trajectory_df.groupby('id')
