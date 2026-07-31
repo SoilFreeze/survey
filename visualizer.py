@@ -116,8 +116,8 @@ class SurveyVisualizer:
             ax.annotate(str(txt), (e_coords[i], n_coords[i]), fontsize=8, xytext=(3, 3), textcoords='offset points', color='black', weight='normal', zorder=12)
 
     def plot_hole_comparison(self, comparison_df, hole_id, neighbors_dict=None, show_neighbor=False, hide_baseline=False, show_casing=True, plan_view_only=False):
-        if comparison_df.empty: return
-        self._create_comparison_plot(comparison_df, hole_id, neighbors_dict, show_neighbor, hide_baseline, show_casing, plan_view_only, save_path=None)
+        if comparison_df.empty: return None  # <-- Added 'None'
+        return self._create_comparison_plot(comparison_df, hole_id, neighbors_dict, show_neighbor, hide_baseline, show_casing, plan_view_only, save_path=None) # <-- Added 'return'
 
     def save_static_graph_to_file(self, comparison_df, hole_id, filepath, show_casing=True):
         if comparison_df.empty: return
@@ -192,8 +192,11 @@ class SurveyVisualizer:
         else: axs[0].legend(loc='upper right')
         
         plt.tight_layout()
-        if save_path: plt.savefig(save_path); plt.close(fig)
-        else: plt.show()
+        if save_path: 
+            plt.savefig(save_path)
+            plt.close(fig)
+        else: 
+            return fig  # <-- This must say 'return fig' instead of 'plt.show()'
 
     def plot_batch_date_comparison(self, batch_df, date_str):
         if batch_df.empty: return
