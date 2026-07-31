@@ -228,16 +228,41 @@ class ProjectDB:
         surveys = self.client.query(surveys_query).to_dataframe()
         return holes, surveys
 
-    def get_surveyed_ids(self):
+   def get_surveyed_ids(self):
         if not self.current_project: return []
+        
+        # Updated to use hole_id and the surveys table
         query = f"""
-            SELECT DISTINCT h.clean_id 
+            SELECT DISTINCT h.hole_id 
             FROM `{self.dataset_ref}.holes` h 
-            JOIN `{self.dataset_ref}.downhole` d ON h.id = d.hole_id 
-            WHERE h.project_id = @project_id AND d.project_id = @project_id
-            ORDER BY h.clean_id
+            JOIN `{self.dataset_ref}.surveys` s ON h.hole_id = s.hole_id 
+            WHERE h.project_id = @project_id AND s.project_id = @project_id
+            ORDER BY h.hole_id
         """
-        job_config = bigquery.QueryJobConfig(query_parameters=[bigquery.ScalarQueryParameter("project_id", "STRING", self.current_project)])
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[bigquery.ScalarQueryParameter("project_id", "STRING", self.current_project)]
+        )
+        return [row[0] for row in self.client.query(query, job_config=job_config).result()]
+
+    def get_holes_by_date(self, date_str):
+        if not self.current_project: return []
+        
+        # Updated to use hole_id, surveys table, and cast the date
+        query = f"""
+            SELECT DISTINCT h.hole_id 
+            FROM `{self.dataset_ref}.holes` h 
+            JOIN `{self.dataset_ref}.surveys` s ON h.hole_id = s.hole_id 
+            WHERE h.project_id = @project_id 
+            AND s.project_id = @project_id 
+            AND CAST(s.upload_date AS STRING) = @date_str
+            ORDER BY h.hole_id
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("project_id", "STRING", self.current_project),
+                bigquery.ScalarQueryParameter("date_str", "STRING", date_str)
+            ]
+        )
         return [row[0] for row in self.client.query(query, job_config=job_config).result()]
 
     def get_available_dates(self):
