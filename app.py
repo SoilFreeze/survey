@@ -260,3 +260,58 @@ with tab4:
                 file_name=f"DevReport_{target_date or 'ALL'}.csv",
                 mime='text/csv',
             )
+# --- TAB 5: Elevation Slices ---
+with tab5:
+    st.header("Pipe Locations at Target Elevation")
+    
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        # We use a unique key here so it doesn't conflict with Tab 2's target_elev
+        slice_elev = st.number_input("Target Elevation (ft)", value=0.0, key="slice_elev_input")
+        generate_slice = st.button("Generate Elevation Report")
+        
+    if generate_slice:
+        with st.spinner("Calculating trajectories and slicing..."):
+            holes, surveys = st.session_state.db.get_all_data()
+            origin_n, origin_e = st.session_state.db.get_project_origin(st.session_state.db.current_project)
+            
+            # Calculate the full 3D paths for all holes
+            traj = st.session_state.math.calculate_trajectory(holes, surveys, origin_north=origin_n, origin_east=origin_e)
+            
+            if not traj.empty:
+                # Get the intersecting coordinates at the specific elevation
+                res = st.session_state.math.get_slice_at_elevation(traj, slice_elev)
+                
+                if not res.empty:
+                    # Clean up and reorganize the dataframe for the final report
+                    report_df = res[['ID', 'Survey_Status', 'North_New', 'East_New', 'Deviation', 'Deviation_Percent']].copy()
+                    report_df = report_df.rename(columns={
+                        'Survey_Status': 'Status',
+                        'North_New': 'North (ft)',
+                        'East_New': 'East (ft)',
+                        'Deviation': 'Dev (ft)',
+                        'Deviation_Percent': 'Dev (%)'
+                    })
+                    
+                    # Round the coordinates and deviations for a professional output
+                    report_df = report_df.round({
+                        'North (ft)': 3,
+                        'East (ft)': 3,
+                        'Dev (ft)': 2,
+                        'Dev (%)': 2
+                    })
+                    
+                    st.dataframe(report_df, use_container_width=True)
+                    
+                    # Generate the CSV payload for download
+                    csv = report_df.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="Download Coordinate Report (CSV)",
+                        data=csv,
+                        file_name=f"Pipe_Coordinates_{slice_elev}ft.csv",
+                        mime='text/csv',
+                    )
+                else:
+                    st.warning(f"No pipes intersect the target elevation of {slice_elev} ft.")
+            else:
+                st.error("No trajectory data available to calculate.")
