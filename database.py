@@ -40,6 +40,30 @@ class ProjectDB:
         """
         self.client.query(downhole_query).result()
 
+    def delete_top_surveys(self, target_holes):
+        if not self.current_project: return 0
+        
+        query = f"""
+            UPDATE `{self.dataset_ref}.holes`
+            SET actual_n = NULL, actual_e = NULL, actual_z = NULL, n_top = NULL, e_top = NULL, z_top = NULL
+            WHERE project_id = @project_id
+        """
+        
+        query_params = [bigquery.ScalarQueryParameter("project_id", "STRING", self.current_project)]
+        
+        # Check if we are deleting specific holes or clearing the entire project
+        if isinstance(target_holes, list):
+            query += " AND hole_id IN UNNEST(@hole_ids)"
+            query_params.append(bigquery.ArrayQueryParameter("hole_ids", "STRING", target_holes))
+        elif target_holes != "ALL":
+            return 0  # Failsafe
+            
+        job_config = bigquery.QueryJobConfig(query_parameters=query_params)
+        job = self.client.query(query, job_config=job_config)
+        job.result()
+        
+        return job.num_dml_affected_rows
+        
     def delete_survey_batch(self, survey_type, upload_date_str):
         if not self.current_project: return 0
         
