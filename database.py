@@ -50,9 +50,15 @@ class ProjectDB:
         job_config = bigquery.QueryJobConfig(
             query_parameters=[bigquery.ScalarQueryParameter("project_id", "STRING", project_id)]
         )
-        result = self.client.query(query, job_config=job_config).fetchone()
-        if result:
-            return result.origin_north, result.origin_east
+        
+        # Execute the query and wait for the results
+        query_job = self.client.query(query, job_config=job_config)
+        rows = list(query_job.result())
+        
+        # Check if the list contains any rows
+        if rows:
+            return rows[0].origin_north, rows[0].origin_east
+            
         return 0.0, 0.0 # Default origin if none specified
         
     def create_new_project(self, project_id, folder_path=None):
