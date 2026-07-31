@@ -132,9 +132,10 @@ with tab1:
                 for csv_file in casing_csvs:
                     df = process_uploaded_csv(csv_file, ['Length', 'Azimuth', 'Inclination'])
                     if df is not None:
-                        # Extract YYYY-MM-DD from the file name
-                        match = re.search(r'\d{4}-\d{2}-\d{2}', csv_file.name)
-                        file_date = match.group(0) if match else casing_fallback_date.strftime("%Y-%m-%d")
+                        # Extract YYYY-MM-DD or YYYY.MM.DD from the file name
+                        match = re.search(r'\d{4}[-.]\d{2}[-.]\d{2}', csv_file.name)
+                        # Standardize format to YYYY-MM-DD for the database
+                        file_date = match.group(0).replace('.', '-') if match else casing_fallback_date.strftime("%Y-%m-%d")
                         
                         cnt = st.session_state.db.import_downhole(df, 'Casing', file_date)
                         total_cnt += cnt
@@ -152,14 +153,16 @@ with tab1:
                 for csv_file in pipe_csvs:
                     df = process_uploaded_csv(csv_file, ['Length', 'Azimuth', 'Inclination'])
                     if df is not None:
-                        # Extract YYYY-MM-DD from the file name
-                        match = re.search(r'\d{4}-\d{2}-\d{2}', csv_file.name)
-                        file_date = match.group(0) if match else pipe_fallback_date.strftime("%Y-%m-%d")
+                        # Extract YYYY-MM-DD or YYYY.MM.DD from the file name
+                        match = re.search(r'\d{4}[-.]\d{2}[-.]\d{2}', csv_file.name)
+                        # Standardize format to YYYY-MM-DD for the database
+                        file_date = match.group(0).replace('.', '-') if match else pipe_fallback_date.strftime("%Y-%m-%d")
                         
                         cnt = st.session_state.db.import_downhole(df, 'Pipe', file_date)
                         total_cnt += cnt
                         
             st.success(f"Imported {total_cnt} Pipe records across {len(pipe_csvs)} files.")
+            
 # --- TAB 2: Map Visualization ---
 with tab2:
     st.header("Map Visualization Options")
