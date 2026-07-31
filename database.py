@@ -40,6 +40,28 @@ class ProjectDB:
         """
         self.client.query(downhole_query).result()
 
+    def delete_survey_batch(self, survey_type, upload_date_str):
+        if not self.current_project: return 0
+        
+        query = f"""
+            DELETE FROM `{self.dataset_ref}.surveys`
+            WHERE project_id = @project_id 
+            AND survey_type = @survey_type 
+            AND CAST(upload_date AS STRING) = @upload_date_str
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("project_id", "STRING", self.current_project),
+                bigquery.ScalarQueryParameter("survey_type", "STRING", survey_type),
+                bigquery.ScalarQueryParameter("upload_date_str", "STRING", upload_date_str),
+            ]
+        )
+        job = self.client.query(query, job_config=job_config)
+        job.result()  # Wait for the query to finish
+        
+        # Return the exact number of rows that were deleted
+        return job.num_dml_affected_rows
+        
     def get_project_origin(self, project_id):
         """Fetches the shift/origin for a specific project."""
         query = f"""
