@@ -43,25 +43,29 @@ class ProjectDB:
     def delete_top_surveys(self, target_holes):
         if not self.current_project: return 0
         
-        # Simplified query without the date column reference
-        query = f"""
-            UPDATE `{self.dataset_ref}.holes`
-            SET actual_n = NULL, 
-                actual_e = NULL, 
-                actual_z = NULL, 
-                n_top = NULL, 
-                e_top = NULL, 
-                z_top = NULL
-            WHERE project_id = @project_id
-        """
-        
-        query_params = [bigquery.ScalarQueryParameter("project_id", "STRING", self.current_project)]
-        
-        if isinstance(target_holes, list) and len(target_holes) > 0:
-            query += " AND hole_id IN UNNEST(@hole_ids)"
-            query_params.append(bigquery.ArrayQueryParameter("hole_ids", "STRING", target_holes))
-        elif target_holes != "ALL":
-            return 0 
+        if target_holes == "ALL":
+            query = f"""
+                UPDATE `{self.dataset_ref}.holes`
+                SET actual_n = NULL, actual_e = NULL, actual_z = NULL, 
+                    n_top = NULL, e_top = NULL, z_top = NULL
+                WHERE project_id = '{self.current_project}'
+            """
+            job = self.client.query(query)
+            job.result()
+            return job.num_dml_affected_rows
+        elif isinstance(target_holes, list) and len(target_holes) > 0:
+            formatted_holes = ", ".join([f"'{h}'" for h in target_holes])
+            query = f"""
+                UPDATE `{self.dataset_ref}.holes`
+                SET actual_n = NULL, actual_e = NULL, actual_z = NULL, 
+                    n_top = NULL, e_top = NULL, z_top = NULL
+                WHERE project_id = '{self.current_project}'
+                AND hole_id IN ({formatted_holes})
+            """
+            job = self.client.query(query)
+            job.result()
+            return job.num_dml_affected_rows
+        return 0
             
         job_config = bigquery.QueryJobConfig(query_parameters=query_params)
         job = self.client.query(query, job_config=job_config)
