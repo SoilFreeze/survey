@@ -163,20 +163,26 @@ with tab2:
             holes, surveys = st.session_state.db.get_all_data()
             traj = st.session_state.math.calculate_trajectory(holes, surveys, origin_north=origin_n, origin_east=origin_e)
             res = st.session_state.math.get_slice_at_elevation(traj, target_elev)
-            st.session_state.vis.generate_grid_heatmap(res, target_elev, grid_res if use_custom_grid else 0.2, var_filter, var_labels)
+            # Capture the figure and plot it
+            fig = st.session_state.vis.generate_grid_heatmap(res, target_elev, grid_res if use_custom_grid else 0.2, var_filter, var_labels)
+            if fig: st.pyplot(fig)
             
     with map_col2:
         if st.button("Generate Pipe Map"):
             holes, surveys = st.session_state.db.get_all_data()
             traj = st.session_state.math.calculate_trajectory(holes, surveys, origin_north=origin_n, origin_east=origin_e)
             res = st.session_state.math.get_slice_at_elevation(traj, target_elev)
-            st.session_state.vis.generate_pipe_heatmap(res, target_elev, var_filter, var_labels, var_map_mode)
+            # Capture the figure and plot it
+            fig = st.session_state.vis.generate_pipe_heatmap(res, target_elev, var_filter, var_labels, var_map_mode)
+            if fig: st.pyplot(fig)
 
     with map_col3:
         if st.button("Top Deviation Map"):
             holes, _ = st.session_state.db.get_all_data()
             top_vectors = st.session_state.math.get_top_deviation_vectors(holes)
-            st.session_state.vis.plot_top_deviation_map(top_vectors)
+            # Capture the figure and plot it
+            fig = st.session_state.vis.plot_top_deviation_map(top_vectors)
+            if fig: st.pyplot(fig)
 
 # --- TAB 3: QC & Single Hole Analysis ---
 with tab3:
@@ -208,14 +214,19 @@ with tab3:
                 neighbors_dict = {closest_key: all_neigh[closest_key]}
         # ... logic for other modes skipped for brevity but identical to source ...
 
+        # ... inside the "if st.button("Show Comparison Graphs")" block ...
+        
         comp_df = st.session_state.math.calculate_single_hole_all_versions(row, surveys_specific)
-        st.session_state.vis.plot_hole_comparison(
+        
+        # Capture the figure and plot it
+        fig = st.session_state.vis.plot_hole_comparison(
             comp_df, target_hole, neighbors_dict, 
             show_neighbor=var_qc_neighbor, 
             hide_baseline=var_qc_hide_base, 
             show_casing=var_qc_show_casing,
             plan_view_only=(neighbor_mode == "Cluster (15ft Radius)")
         )
+        if fig: st.pyplot(fig)
 
 # --- TAB 4: Batch Reporting ---
 with tab4:
