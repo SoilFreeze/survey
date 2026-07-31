@@ -95,12 +95,26 @@ with st.sidebar:
     if st.button("Create Project") and new_proj_name and base_csv:
         df_base = process_uploaded_csv(base_csv, ['North', 'East'])
         if df_base is not None:
-            # Note: folder path is no longer needed for BigQuery
             st.session_state.db.create_new_project(new_proj_name)
             cnt = st.session_state.db.import_baseline(df_base)
             st.session_state.project_loaded = True
             st.success(f"Project '{new_proj_name}' created! Imported {cnt} baseline records.")
 
+    # --- NEW: Project Summary Display ---
+    if st.session_state.project_loaded:
+        st.divider()
+        st.subheader("Project Summary")
+        
+        summary = st.session_state.db.get_project_summary()
+        if summary:
+            # Display metrics using Streamlit's built-in metric widgets
+            col1, col2 = st.columns(2)
+            col1.metric("Total Pipes", summary["total_pipes"])
+            col2.metric("Top Surveys", summary["top_surveys"])
+            
+            col3, col4 = st.columns(2)
+            col3.metric("Downhole Surveys", summary["downhole_surveys"])
+            col4.metric("Last Update", summary["last_update"])
 if not st.session_state.project_loaded:
     st.info("Please load or create a project from the sidebar to continue.")
     st.stop()
