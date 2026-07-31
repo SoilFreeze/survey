@@ -131,8 +131,8 @@ class ProjectDB:
         updated = 0
         query = f"""
             UPDATE `{self.dataset_ref}.holes`
-            SET n_top = @n, e_top = @e, z_top = @z, has_top_survey = 1
-            WHERE project_id = @project_id AND clean_id = @clean_id
+            SET actual_n = @n, actual_e = @e, actual_z = @z
+            WHERE project_id = @project_id AND hole_id = @clean_id
         """
         for _, row in df.iterrows():
             job_config = bigquery.QueryJobConfig(
@@ -153,13 +153,13 @@ class ProjectDB:
         final_date = date_override if date_override else datetime.now().strftime("%Y-%m-%d")
         ids = df['clean_ID'].unique().tolist()
         
-        # 1. Clear existing data to prevent duplicates
+        # 1. Clear existing data to prevent duplicates in 'surveys'
         delete_query = f"""
-            DELETE FROM `{self.dataset_ref}.downhole`
+            DELETE FROM `{self.dataset_ref}.surveys`
             WHERE project_id = @project_id 
             AND survey_type = @survey_type 
-            AND upload_date = @final_date
-            AND hole_id IN (SELECT id FROM `{self.dataset_ref}.holes` WHERE project_id = @project_id AND clean_id IN UNNEST(@ids))
+            AND upload_date = CAST(@final_date AS DATE)
+            AND hole_id IN UNNEST(@ids)
         """
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
@@ -171,31 +171,25 @@ class ProjectDB:
         )
         self.client.query(delete_query, job_config=job_config).result()
 
-        # 2. Fetch real IDs mapping
-        mapping_query = f"SELECT clean_id, id FROM `{self.dataset_ref}.holes` WHERE project_id = @project_id"
-        mapping_config = bigquery.QueryJobConfig(query_parameters=[bigquery.ScalarQueryParameter("project_id", "STRING", self.current_project)])
-        mapping_df = self.client.query(mapping_query, job_config=mapping_config).to_dataframe()
-        id_map = dict(zip(mapping_df['clean_id'], mapping_df['id']))
-
-        # 3. Prepare upload dataframe and push in bulk (much faster than row-by-row)
+        # 3. Prepare upload dataframe matching 'surveys' schema exactly
         upload_rows = []
         for _, row in df.iterrows():
-            real_id = id_map.get(str(row['clean_ID']))
-            if real_id:
-                upload_rows.append({
-                    "project_id": self.current_project,
-                    "hole_id": real_id,
-                    "depth": float(row['Length']),
-                    "azimuth": float(row['Azimuth']),
-                    "inclination": float(row['Inclination']),
-                    "survey_type": survey_type,
-                    "upload_date": final_date
-                })
+            upload_rows.append({
+                "project_id": self.current_project,
+                "hole_id": str(row['clean_ID']),
+                "length": float(row['Length']),
+                "azimuth": float(row['Azimuth']),
+                "inclination": float(row['Inclination']),
+                "survey_type": survey_type,
+                "upload_date": final_date
+            })
         
         if upload_rows:
             upload_df = pd.DataFrame(upload_rows)
-            # Load straight to BigQuery
-            job = self.client.load_table_from_dataframe(upload_df, f"{self.dataset_ref}.downhole")
+            # Ensure dates are properly cast for the dataframe before upload
+            upload_df['upload_date'] = pd.to_datetime(upload_df['upload_date']).dt.date
+            
+            job = self.client.load_table_from_dataframe(upload_df, f"{self.dataset_ref}.surveys")
             job.result()
             return len(upload_rows)
         return 0
@@ -203,22 +197,23 @@ class ProjectDB:
     def get_all_data(self):
         if not self.current_project: return pd.DataFrame(), pd.DataFrame()
         
-        # Mapping your schema to what your math_engine expects
+        # Translate BQ 'holes' schema to what math_engine expects
         holes_query = f"""
             SELECT 
                 hole_id AS id, 
-                hole_id AS clean_id, 
+                hole_id AS clean_id, /* Using hole_id as fallback since clean_id isn't in BQ */
                 design_n AS n_base, design_e AS e_base, design_z AS z_base,
                 actual_n AS n_top, actual_e AS e_top, actual_z AS z_top,
+                CASE WHEN actual_n IS NOT NULL THEN 1 ELSE 0 END AS has_top_survey,
                 design_inc, design_az, design_length AS design_len
             FROM `{self.dataset_ref}.holes` 
             WHERE project_id = '{self.current_project}'
         """
         
-        # Use your 'surveys' table for survey data
+        # Pulling from 'surveys' instead of 'downhole'
         surveys_query = f"""
             SELECT 
-                hole_id, length AS depth, azimuth, inclination, survey_type, upload_date
+                hole_id, length AS depth, azimuth, inclination, survey_type, CAST(upload_date AS STRING) AS upload_date
             FROM `{self.dataset_ref}.surveys` 
             WHERE project_id = '{self.current_project}'
         """
