@@ -180,27 +180,47 @@ with tab1:
                         
             st.success(f"Imported {total_cnt} Pipe records across {len(pipe_csvs)} files.")
     st.divider()
-    with st.expander("🗑️ Delete Uploaded Survey Batches"):
-        st.caption("Use this tool to permanently remove a specific batch of surveys from the database.")
+    with st.expander("🗑️ Delete Uploaded Data"):
+        st.caption("Use this tool to permanently remove downhole batches or clear top coordinates.")
         del_col1, del_col2, del_col3 = st.columns(3)
         
         with del_col1:
-            del_type = st.selectbox("Survey Type to Delete", ["Pipe", "Casing"])
+            # Added "Top Survey" to the list
+            del_type = st.selectbox("Data Type to Delete", ["Pipe", "Casing", "Top Survey"])
         
         with del_col2:
-            avail_dates = st.session_state.db.get_available_dates()
-            del_date = st.selectbox("Batch Upload Date", [""] + avail_dates)
-            
+            if del_type in ["Pipe", "Casing"]:
+                avail_dates = st.session_state.db.get_available_dates()
+                del_date = st.selectbox("Batch Upload Date", [""] + avail_dates)
+            else:
+                # Dynamic text input for Top Surveys
+                del_target = st.text_input("Hole IDs (comma-separated, or type 'ALL')")
+                
         with del_col3:
             st.write("") # Alignment spacing
             st.write("") 
-            if st.button("Delete Batch", type="primary"):
-                if del_date:
-                    with st.spinner(f"Deleting {del_type} records..."):
-                        deleted_count = st.session_state.db.delete_survey_batch(del_type, del_date)
-                    st.success(f"Successfully deleted {deleted_count} {del_type} records from {del_date}.")
+            if st.button("Delete Data", type="primary"):
+                # Handle Pipe & Casing
+                if del_type in ["Pipe", "Casing"]:
+                    if del_date:
+                        with st.spinner(f"Deleting {del_type} records..."):
+                            deleted_count = st.session_state.db.delete_survey_batch(del_type, del_date)
+                        st.success(f"Successfully deleted {deleted_count} {del_type} records from {del_date}.")
+                    else:
+                        st.warning("Please select a date to delete.")
+                # Handle Top Surveys
                 else:
-                    st.warning("Please select a date to delete.")
+                    if del_target:
+                        with st.spinner("Clearing Top Surveys..."):
+                            if del_target.strip().upper() == "ALL":
+                                cleared_count = st.session_state.db.delete_top_surveys("ALL")
+                            else:
+                                # Clean up the user input into a Python list
+                                h_list = [h.strip() for h in del_target.split(',') if h.strip()]
+                                cleared_count = st.session_state.db.delete_top_surveys(h_list)
+                        st.success(f"Successfully cleared Top Surveys for {cleared_count} holes.")
+                    else:
+                        st.warning("Please enter specific Hole IDs or type 'ALL'.")
 # --- TAB 2: Map Visualization ---
 with tab2:
     st.header("Map Visualization Options")
