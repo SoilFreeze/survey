@@ -206,27 +206,44 @@ class ProjectDB:
             count += 1
         return count
 
-    def update_top_survey(self, df):
+    def update_top_survey(self, df, survey_date=None):
         if not self.current_project: return 0
-        updated = 0
-        query = f"""
-            UPDATE `{self.dataset_ref}.holes`
-            SET actual_n = @n, actual_e = @e, actual_z = @z
-            WHERE project_id = @project_id AND hole_id = @clean_id
-        """
+        
+        # Ensure date is provided or default to current date
+        if not survey_date:
+            survey_date = datetime.now().strftime("%Y-%m-%d")
+            
+        updated_count = 0
         for _, row in df.iterrows():
+            hole_id = row.get('id') or row.get('hole_id')
+            n = row.get('North') or row.get('north')
+            e = row.get('East') or row.get('east')
+            z = row.get('Elevation') or row.get('elevation', None)
+            
+            if not hole_id or pd.isna(n) or pd.isna(e): continue
+            
+            query = f"""
+                UPDATE `{self.dataset_ref}.holes`
+                SET actual_n = @n, actual_e = @e, actual_z = @z,
+                    n_top = @n, e_top = @e, z_top = @z,
+                    top_survey_date = @survey_date
+                WHERE project_id = @project_id AND hole_id = @hole_id
+            """
             job_config = bigquery.QueryJobConfig(
                 query_parameters=[
-                    bigquery.ScalarQueryParameter("n", "FLOAT64", float(row['North'])),
-                    bigquery.ScalarQueryParameter("e", "FLOAT64", float(row['East'])),
-                    bigquery.ScalarQueryParameter("z", "FLOAT64", float(row['Elev'])),
+                    bigquery.ScalarQueryParameter("n", "FLOAT64", float(n)),
+                    bigquery.ScalarQueryParameter("e", "FLOAT64", float(e)),
+                    bigquery.ScalarQueryParameter("z", "FLOAT64", float(z) if pd.notna(z) else None),
+                    bigquery.ScalarQueryParameter("survey_date", "STRING", survey_date),
                     bigquery.ScalarQueryParameter("project_id", "STRING", self.current_project),
-                    bigquery.ScalarQueryParameter("clean_id", "STRING", str(row['clean_ID'])),
+                    bigquery.ScalarQueryParameter("hole_id", "STRING", str(hole_id)),
                 ]
             )
-            res = self.client.query(query, job_config=job_config).result()
-            if res.num_dml_affected_rows > 0: updated += 1
-        return updated
+            job = self.client.query(query, job_config=job_config)
+            job.result()
+            updated_count += 1
+            
+        return updated_count
 
     def import_downhole(self, df, survey_type, date_override=None):
         if not self.current_project: return 0
