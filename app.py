@@ -106,9 +106,8 @@ if not st.session_state.project_loaded:
     st.stop()
 
 # --- Main Interface Tabs ---
-tab1, tab2, tab3, tab4 = st.tabs(["Data & Analysis", "Map Visualization", "QC & Single Hole", "Batch Reporting"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["Data & Analysis", "Map Visualization", "QC & Single Hole", "Batch Reporting", "Elevation Slices"])
 
-# --- TAB 1: Data & Analysis ---
 # --- TAB 1: Data & Analysis ---
 with tab1:
     st.header("Import Data")
