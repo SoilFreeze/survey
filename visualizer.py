@@ -222,7 +222,7 @@ class SurveyVisualizer:
 
     def generate_grid_heatmap(self, df_at_depth, depth_label, grid_res=1.0, filter_surveyed=False, show_labels=False):
         if filter_surveyed: df_at_depth = df_at_depth[df_at_depth['Survey_Status'].isin(['Casing', 'Pipe'])]
-        if df_at_depth.empty: return
+        if df_at_depth.empty: return None
         n, e = self._get_coords(df_at_depth)
         coords = np.column_stack((n, e))
         if len(coords) >= 2:
@@ -234,11 +234,13 @@ class SurveyVisualizer:
         fig, ax = plt.subplots(figsize=(12, 10))
         self._plot_markers(ax, df_at_depth, cmap, norm, 10, 'min_dist')
         if show_labels: self._add_labels(ax, df_at_depth, n, e)
-        ax.set_title(f"Grid Map {depth_label}"); ax.axis('equal'); plt.show()
+        ax.set_title(f"Grid Map {depth_label}"); ax.axis('equal')
+        
+        return fig  # <-- Changed from plt.show()
 
     def generate_pipe_heatmap(self, df_at_depth, depth_label, filter_surveyed=False, show_labels=False, mode="Deviation (ft)"):
         if filter_surveyed: df_at_depth = df_at_depth[df_at_depth['Survey_Status'].isin(['Casing', 'Pipe'])]
-        if df_at_depth.empty: return
+        if df_at_depth.empty: return None
         n, e = self._get_coords(df_at_depth)
         
         if mode == "Deviation (%)":
@@ -253,7 +255,9 @@ class SurveyVisualizer:
         
         sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm); sm.set_array([])
         cbar = fig.colorbar(sm, ax=ax, label=label, extend='max')
-        ax.set_title(f"Pipe Map {depth_label} [{mode}]"); ax.axis('equal'); plt.show()
+        ax.set_title(f"Pipe Map {depth_label} [{mode}]"); ax.axis('equal')
+        
+        return fig  # <-- Changed from plt.show()
 
     def plot_deviation_needles(self, vectors_df, surveyed_only=False):
         if vectors_df.empty: return
