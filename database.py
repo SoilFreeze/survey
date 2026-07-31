@@ -43,7 +43,7 @@ class ProjectDB:
     def delete_top_surveys(self, target_holes):
         if not self.current_project: return 0
         
-        # Base query to clear top survey fields and the date
+        # Simplified query without the date column reference
         query = f"""
             UPDATE `{self.dataset_ref}.holes`
             SET actual_n = NULL, 
@@ -51,19 +51,17 @@ class ProjectDB:
                 actual_z = NULL, 
                 n_top = NULL, 
                 e_top = NULL, 
-                z_top = NULL,
-                top_survey_date = NULL
+                z_top = NULL
             WHERE project_id = @project_id
         """
         
         query_params = [bigquery.ScalarQueryParameter("project_id", "STRING", self.current_project)]
         
-        # If specific holes are provided, target only those
         if isinstance(target_holes, list) and len(target_holes) > 0:
             query += " AND hole_id IN UNNEST(@hole_ids)"
             query_params.append(bigquery.ArrayQueryParameter("hole_ids", "STRING", target_holes))
         elif target_holes != "ALL":
-            return 0  # Failsafe if invalid argument is passed
+            return 0 
             
         job_config = bigquery.QueryJobConfig(query_parameters=query_params)
         job = self.client.query(query, job_config=job_config)
