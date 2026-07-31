@@ -267,8 +267,21 @@ class ProjectDB:
 
     def get_available_dates(self):
         if not self.current_project: return []
-        query = f"SELECT DISTINCT upload_date FROM `{self.dataset_ref}.downhole` WHERE project_id = '{self.current_project}' AND upload_date IS NOT NULL ORDER BY upload_date DESC"
-        return [row[0] for row in self.client.query(query).result()]
+        
+        # Updated to use the surveys table and parameterized queries
+        query = f"""
+            SELECT DISTINCT CAST(upload_date AS STRING) 
+            FROM `{self.dataset_ref}.surveys` 
+            WHERE project_id = @project_id 
+            AND upload_date IS NOT NULL 
+            ORDER BY 1 DESC
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("project_id", "STRING", self.current_project)
+            ]
+        )
+        return [row[0] for row in self.client.query(query, job_config=job_config).result()]
 
     def get_holes_by_date(self, date_str):
         if not self.current_project: return []
