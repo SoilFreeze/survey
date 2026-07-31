@@ -154,7 +154,7 @@ with tab2:
 
     st.warning("Note: Visualizer currently uses `plt.show()`. Maps will open in a separate window on the host machine. (See modification notes below).")
 
-    origin_n, origin_e = st.session_state.db.get_project_origin(st.session_state.current_project)
+    origin_n, origin_e = st.session_state.db.get_project_origin(st.session_state.db.current_project)
     holes, surveys = st.session_state.db.get_all_data()
     
     map_col1, map_col2, map_col3 = st.columns(3)
