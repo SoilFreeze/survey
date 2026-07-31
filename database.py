@@ -228,7 +228,7 @@ class ProjectDB:
         surveys = self.client.query(surveys_query).to_dataframe()
         return holes, surveys
 
-   def get_surveyed_ids(self):
+def get_surveyed_ids(self):
         if not self.current_project: return []
         
         # Updated to use hole_id and the surveys table
