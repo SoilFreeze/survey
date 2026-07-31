@@ -179,28 +179,28 @@ with tab1:
                         total_cnt += cnt
                         
             st.success(f"Imported {total_cnt} Pipe records across {len(pipe_csvs)} files.")
-        st.divider()
-            with st.expander("🗑️ Delete Uploaded Survey Batches"):
-                st.caption("Use this tool to permanently remove a specific batch of surveys from the database.")
-                del_col1, del_col2, del_col3 = st.columns(3)
-                
-                with del_col1:
-                    del_type = st.selectbox("Survey Type to Delete", ["Pipe", "Casing"])
-                
-                with del_col2:
-                    avail_dates = st.session_state.db.get_available_dates()
-                    del_date = st.selectbox("Batch Upload Date", [""] + avail_dates)
-                    
-                with del_col3:
-                    st.write("") # Alignment spacing
-                    st.write("") 
-                    if st.button("Delete Batch", type="primary"):
-                        if del_date:
-                            with st.spinner(f"Deleting {del_type} records..."):
-                                deleted_count = st.session_state.db.delete_survey_batch(del_type, del_date)
-                            st.success(f"Successfully deleted {deleted_count} {del_type} records from {del_date}.")
-                        else:
-                            st.warning("Please select a date to delete.")
+    st.divider()
+    with st.expander("🗑️ Delete Uploaded Survey Batches"):
+        st.caption("Use this tool to permanently remove a specific batch of surveys from the database.")
+        del_col1, del_col2, del_col3 = st.columns(3)
+        
+        with del_col1:
+            del_type = st.selectbox("Survey Type to Delete", ["Pipe", "Casing"])
+        
+        with del_col2:
+            avail_dates = st.session_state.db.get_available_dates()
+            del_date = st.selectbox("Batch Upload Date", [""] + avail_dates)
+            
+        with del_col3:
+            st.write("") # Alignment spacing
+            st.write("") 
+            if st.button("Delete Batch", type="primary"):
+                if del_date:
+                    with st.spinner(f"Deleting {del_type} records..."):
+                        deleted_count = st.session_state.db.delete_survey_batch(del_type, del_date)
+                    st.success(f"Successfully deleted {deleted_count} {del_type} records from {del_date}.")
+                else:
+                    st.warning("Please select a date to delete.")
 # --- TAB 2: Map Visualization ---
 with tab2:
     st.header("Map Visualization Options")
