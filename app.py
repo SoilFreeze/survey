@@ -100,24 +100,27 @@ with st.sidebar:
             st.session_state.project_loaded = True
             st.success(f"Project '{new_proj_name}' created! Imported {cnt} baseline records.")
 
-    # --- NEW: Project Summary Display ---
-    if st.session_state.project_loaded:
-        st.divider()
-        st.subheader("Project Summary")
-        
-        summary = st.session_state.db.get_project_summary()
-        if summary:
-            # Display metrics using Streamlit's built-in metric widgets
-            col1, col2 = st.columns(2)
-            col1.metric("Total Pipes", summary["total_pipes"])
-            col2.metric("Top Surveys", summary["top_surveys"])
-            
-            col3, col4 = st.columns(2)
-            col3.metric("Downhole Surveys", summary["downhole_surveys"])
-            col4.metric("Last Update", summary["last_update"])
+    
 if not st.session_state.project_loaded:
     st.info("Please load or create a project from the sidebar to continue.")
     st.stop()
+
+if not st.session_state.project_loaded:
+    st.info("Please load or create a project from the sidebar to continue.")
+    st.stop()
+
+# --- MAIN PAGE: Project Summary ---
+st.subheader(f"Project: {st.session_state.db.current_project}")
+summary = st.session_state.db.get_project_summary()
+if summary:
+    # Use 4 columns since we are on the wide main page
+    sum_col1, sum_col2, sum_col3, sum_col4 = st.columns(4)
+    sum_col1.metric("Total Pipes", summary["total_pipes"])
+    sum_col2.metric("Top Surveys", summary["top_surveys"])
+    sum_col3.metric("Downhole Surveys", summary["downhole_surveys"])
+    sum_col4.metric("Last Update", summary["last_update"])
+
+st.divider()
 
 # --- Main Interface Tabs ---
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["Data & Analysis", "Map Visualization", "QC & Single Hole", "Batch Reporting", "Elevation Slices"])
