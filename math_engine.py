@@ -121,30 +121,25 @@ class SurveyMath:
                 
             active_survey = pd.DataFrame()
 
-            if not hole_surveys.empty:
-                pipe = hole_surveys[hole_surveys['survey_type'] == 'Pipe']
-                casing = hole_surveys[hole_surveys['survey_type'] == 'Casing']
-                
-                # Priority: Pipe (Latest) -> Casing (Latest) -> Baseline
-                if not pipe.empty:
-                    pipe = pipe.copy()
-                    pipe['upload_date'] = pipe['upload_date'].fillna('Unknown')
-                    dates = sorted(pipe['upload_date'].unique())
-                    active_survey = pipe[pipe['upload_date'] == dates[-1]]
-                    status = 'Pipe'
-                elif not casing.empty:
-                    casing = casing.copy()
-                    casing['upload_date'] = casing['upload_date'].fillna('Unknown')
-                    dates = sorted(casing['upload_date'].unique())
-                    active_survey = casing[casing['upload_date'] == dates[-1]]
-                    status = 'Casing'
-            
+            # --- NEW: Fallback to design coordinates if top survey is missing ---
+            n_start = hole_row['n_top'] if pd.notna(hole_row['n_top']) else hole_row['n_base']
+            e_start = hole_row['e_top'] if pd.notna(hole_row['e_top']) else hole_row['e_base']
+            z_start = hole_row['z_top'] if pd.notna(hole_row['z_top']) else hole_row['z_base']
+
             if not active_survey.empty:
                 group = active_survey.sort_values('depth')
                 path = self.calculate_tangential(
-                    hole_row['n_top'], hole_row['e_top'], hole_row['z_top'],
+                    n_start, e_start, z_start,  # <-- Updated here
                     group['depth'].values, np.radians(group['azimuth'].values), np.radians(group['inclination'].values),
                     status, hole_id, hole_row['clean_id'], d_az, d_inc
+                )
+                full_paths.append(path)
+            else:
+                d_len = hole_row.get('design_len', 200.0) or 200.0
+                path = self.calculate_tangential(
+                    n_start, e_start, z_start,  # <-- Updated here too
+                    np.array([d_len]), np.array([np.radians(d_az)]), np.array([np.radians(d_inc)]),
+                    'Baseline', hole_id, hole_row['clean_id'], d_az, d_inc
                 )
                 full_paths.append(path)
             else:
@@ -282,23 +277,36 @@ class SurveyMath:
     def get_nearby_pipes_data(self, target_clean_id, holes_df, surveys_df, search_radius=10.0):
         all_traj = self.calculate_trajectory(holes_df, surveys_df)
         if all_traj.empty: return {}
+        
+        # --- THE FIX: Drop missing coordinates before feeding into the KDTree ---
+        all_traj = all_traj.dropna(subset=['north', 'east', 'elev'])
+        
         target_traj = all_traj[all_traj['clean_id'] == str(target_clean_id)].copy()
         if target_traj.empty: return {}
+        
         t_start_n = float(target_traj.iloc[0]['n_top'])
         t_start_e = float(target_traj.iloc[0]['e_top'])
         target_points = target_traj[['north', 'east', 'elev']].values
+        
+        # Safely build the spatial tree
         target_tree = cKDTree(target_points)
+        
         nearby_pipes = {}
         other_groups = all_traj[all_traj['clean_id'] != str(target_clean_id)].groupby('clean_id')
+        
         for nid, group in other_groups:
+            if group.empty: continue
+            
             neighbor_points = group[['north', 'east', 'elev']].values
             dists, _ = target_tree.query(neighbor_points, k=1)
             min_dist = np.min(dists)
+            
             if min_dist <= search_radius:
                 group = group.copy()
                 group['rel_north'] = group['north'] - t_start_n
                 group['rel_east'] = group['east'] - t_start_e
                 nearby_pipes[nid] = {'df': group, 'dist': min_dist}
+                
         return nearby_pipes
 
     def _calc_deviation_for_survey(self, row, survey_data, status_label):
