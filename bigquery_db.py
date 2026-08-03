@@ -119,7 +119,7 @@ class BigQueryDB:
         query = f"""
             SELECT 
                 (SELECT COUNT(*) FROM `{self.dataset}.holes` WHERE project_id = @pid) as total_holes,
-                (SELECT COUNT(*) FROM `{self.dataset}.holes` WHERE project_id = @pid AND has_top_survey = 1) as top_survey_holes,
+                (SELECT COUNT(*) FROM `{self.dataset}.holes` WHERE project_id = @pid AND actual_n IS NOT NULL) as top_survey_holes,
                 (SELECT COUNT(DISTINCT hole_id) FROM `{self.dataset}.surveys` WHERE project_id = @pid) as downhole_holes
         """
         params = [bigquery.ScalarQueryParameter("pid", "STRING", self.active_project_id)]
