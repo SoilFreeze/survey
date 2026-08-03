@@ -24,8 +24,33 @@ class SurveyVisualizer:
             app_path = os.path.dirname(sys.executable)
         else:
             app_path = os.path.dirname(os.path.abspath(__file__))
-        self.config.read(os.path.join(app_path, config_file))
-        self.colors = self.config['HeatMapColors']
+            
+        config_path = os.path.join(app_path, config_file)
+        
+        # Only attempt to read if the file actually exists
+        if os.path.exists(config_path):
+            self.config.read(config_path)
+            
+        # Safely fetch the colors, or fallback to hardcoded defaults
+        if 'HeatMapColors' in self.config:
+            self.colors = self.config['HeatMapColors']
+        else:
+            # Fallback to the exact colors from your original config.ini
+            self.colors = {
+                'step_1': '#006400',
+                'step_2': '#008000',
+                'step_3': '#228B22',
+                'step_4': '#32CD32',
+                'step_5': '#90EE90',
+                'step_6': '#FFFFE0',
+                'step_7': '#FFFF00',
+                'step_8': '#FFD700',
+                'step_9': '#FFA500',
+                'step_10': '#FF8C00',
+                'step_11': '#FF4500',
+                'step_12': '#FF0000',
+                'step_13': '#800080'
+            }
 
     def fix_color(self, color_name):
         c = str(color_name).split(';')[0].strip()
