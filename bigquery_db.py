@@ -4,9 +4,25 @@ from datetime import datetime
 
 class BigQueryDB:
     def __init__(self, project_id):
-        # Initialize the BigQuery client (Relies on GOOGLE_APPLICATION_CREDENTIALS environment variable)
-        self.client = bigquery.Client()
-        self.dataset = "sensorpush-export.survey"
+        # 1. Load credentials from Streamlit Secrets
+        try:
+            gcp_secrets = st.secrets["gcp_service_account"]
+            credentials = service_account.Credentials.from_service_account_info(gcp_secrets)
+            
+            # 2. Initialize the BigQuery client explicitly using the secrets
+            self.client = bigquery.Client(
+                credentials=credentials,
+                project=credentials.project_id
+            )
+            
+            # 3. Dynamically set the dataset from secrets
+            dataset_name = st.secrets["bq"]["dataset"]
+            self.dataset = f"{credentials.project_id}.{dataset_name}"
+            
+        except Exception as e:
+            st.error(f"Failed to authenticate with BigQuery. Please check your Streamlit Secrets. Error: {e}")
+            self.client = None
+            
         self.active_project_id = str(project_id)
 
     def _execute_query(self, query, params=None):
