@@ -36,6 +36,22 @@ with st.sidebar:
     if active_project:
         db.active_project_id = active_project
         st.success(f"Connected to project: {active_project}")
+        
+        # Display and manage current project info
+        proj_info = db.get_project_info()
+        if proj_info:
+            with st.expander("⚙️ Manage Project Settings"):
+                with st.form("update_project_form"):
+                    st.write(f"**Project Name:** {proj_info['name']}")
+                    
+                    # Pre-fill inputs with the current database values
+                    upd_n = st.number_input("Origin North (Y)", value=float(proj_info['origin_north']), format="%.3f")
+                    upd_e = st.number_input("Origin East (X)", value=float(proj_info['origin_east']), format="%.3f")
+                    
+                    if st.form_submit_button("Update Origin"):
+                        if db.update_project_origin(upd_n, upd_e):
+                            st.success("Project origin updated successfully!")
+                            st.rerun() # Refresh to show new coordinates
     else:
         st.warning("No projects found. Please create one below.")
         
@@ -53,7 +69,7 @@ with st.sidebar:
                     success = db.create_new_project(new_pid, new_pname, new_n, new_e)
                     if success:
                         st.success(f"Project '{new_pid}' created successfully!")
-                        st.rerun() # Refresh the app to update the dropdown list
+                        st.rerun()
                 else:
                     st.error("Project ID and Name are required.")
 
