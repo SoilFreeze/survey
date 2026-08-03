@@ -60,8 +60,10 @@ with st.sidebar:
     
     # 4. Sidebar - Data Import
     st.header("2. Import Data")
+    
+    # Removed "Casing" from the selectbox options
     import_type = st.selectbox("Select Data Type to Import:", 
-                               ["Baseline", "Top Survey", "Casing", "Pipe", "Pipe Details"])
+                               ["Baseline", "Top Survey", "Pipe", "Pipe Details"])
     
     uploaded_file = st.file_uploader(f"Upload {import_type} CSV", type=["csv"])
     
@@ -102,8 +104,8 @@ with st.sidebar:
                 if st.button(f"Confirm & Upload {import_type} to BigQuery"):
                     with st.spinner("Uploading to BigQuery..."):
                         
-                        if import_type in ["Casing", "Pipe"]:
-                            df = df.rename(columns={'ID': 'hole_id', 'Length': 'length', 'Azimuth': 'azimuth', 'Inclination': 'inclination'})
+                        # Updated to only look for "Pipe"
+                        if import_type == "Pipe":
                             rows_inserted = db.import_downhole(df, import_type, file_date)
                             st.success(f"Successfully uploaded {rows_inserted} rows to {import_type} (Date: {file_date})!")
                             
@@ -116,14 +118,12 @@ with st.sidebar:
                             st.success(f"Successfully updated {rows_inserted} Top Survey records (Date: {file_date})!")
                             
                         elif import_type == "Pipe Details":
-                            # Force any column named 'Type' to become 'pipe_type'
                             df.rename(columns=lambda x: 'pipe_type' if x.strip().lower() == 'type' else x, inplace=True)
                             rows_inserted = db.import_pipe_details(df)
                             st.success(f"Successfully updated {rows_inserted} Pipe Details!")
                             
         except Exception as e:
             st.error(f"Error processing file: {e}")
-
 # 5. Main App Tabs
 tab_data, tab_maps, tab_qc = st.tabs(["Data & Analysis", "Map Visualizations", "QC & Single Hole"])
 
