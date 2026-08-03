@@ -106,8 +106,10 @@ with st.sidebar:
                         
                         # Updated to only look for "Pipe"
                         if import_type == "Pipe":
-                            rows_inserted = db.import_downhole(df, import_type, file_date)
-                            st.success(f"Successfully uploaded {rows_inserted} rows to {import_type} (Date: {file_date})!")
+                            # We now catch both the row count and the unique hole list
+                            rows_inserted, unique_holes = db.import_downhole(df, import_type, file_date)
+                            st.success(f"Successfully processed {len(unique_holes)} specific holes ({rows_inserted} rows) for {import_type}!")
+                            st.info(f"The rest of your holes remain untouched. Holes updated: {', '.join(unique_holes)}")
                             
                         elif import_type == "Baseline":
                             rows_inserted = db.import_baseline(df)
