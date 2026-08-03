@@ -35,6 +35,40 @@ class BigQueryDB:
         job = self.client.query(query, job_config=job_config)
         return job.result()
 
+    def get_all_projects(self):
+        """Fetches a list of all existing project IDs."""
+        if not self.client: return []
+        query = f"SELECT project_id FROM `{self.dataset}.projects` ORDER BY created_at DESC"
+        try:
+            res = self.client.query(query).result()
+            return [row['project_id'] for row in res]
+        except Exception as e:
+            st.error(f"Failed to fetch projects: {e}")
+            return []
+
+    def create_new_project(self, new_id, name, origin_north=0.0, origin_east=0.0, default_length=200.0):
+        """Inserts a new project into the BigQuery projects table."""
+        if not self.client: return False
+        
+        query = f"""
+            INSERT INTO `{self.dataset}.projects` 
+            (project_id, name, origin_north, origin_east, created_at, default_length)
+            VALUES (@project_id, @name, @origin_north, @origin_east, CURRENT_TIMESTAMP(), @default_length)
+        """
+        params = [
+            bigquery.ScalarQueryParameter("project_id", "STRING", str(new_id)),
+            bigquery.ScalarQueryParameter("name", "STRING", str(name)),
+            bigquery.ScalarQueryParameter("origin_north", "FLOAT64", float(origin_north)),
+            bigquery.ScalarQueryParameter("origin_east", "FLOAT64", float(origin_east)),
+            bigquery.ScalarQueryParameter("default_length", "FLOAT64", float(default_length))
+        ]
+        try:
+            self._execute_query(query, params)
+            return True
+        except Exception as e:
+            st.error(f"Failed to create project. It may already exist. Error: {e}")
+            return False
+    
     def get_all_data(self):
         """Fetches holes and surveys, aliasing BQ schema back to legacy math engine schema."""
         holes_query = f"""
