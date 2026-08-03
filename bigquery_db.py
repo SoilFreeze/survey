@@ -242,11 +242,11 @@ class BigQueryDB:
 
     def import_downhole(self, df, survey_type, date_override=None):
         """Deletes existing survey of the same type/date, then bulk uploads new survey points."""
-        if df.empty: return 0
+        if df.empty or not self.client: return 0
         
         final_date = date_override if date_override else datetime.now().strftime("%Y-%m-%d")
         
-        # 1. Delete existing records for this specific batch to prevent duplicates
+        # 1. Clear out old data for this exact survey
         delete_query = f"""
             DELETE FROM `{self.dataset}.surveys`
             WHERE project_id = @project_id 
@@ -260,16 +260,35 @@ class BigQueryDB:
         ]
         self._execute_query(delete_query, params)
 
-        # 2. Prepare Dataframe for BigQuery
+        # 2. Append metadata
         df['project_id'] = self.active_project_id
         df['survey_type'] = survey_type
-        # Cast to datetime so BQ recognizes the DATE schema
         df['upload_date'] = pd.to_datetime(final_date).date() 
         
-        df = df.rename(columns={'clean_ID': 'hole_id', 'Length': 'length', 'Azimuth': 'azimuth', 'Inclination': 'inclination'})
+        # 3. Safely map the hole ID (preventing duplicates)
+        if 'clean_ID' in df.columns:
+            df['hole_id'] = df['clean_ID']
+        elif 'ID' in df.columns:
+            df['hole_id'] = df['ID']
+            
+        # 4. Standardize required columns
+        rename_map = {'Length': 'length', 'Azimuth': 'azimuth', 'Inclination': 'inclination'}
+        df = df.rename(columns=rename_map)
+        
+        # 5. Failsafe for missing columns & blank cells (NaNs)
+        for col in ['length', 'azimuth', 'inclination']:
+            if col not in df.columns:
+                df[col] = 0.0
+            # Fill blanks with 0.0 to prevent PyArrow conversion crashes
+            df[col] = df[col].fillna(0.0) 
+            
+        # 6. Extract only the columns BigQuery wants
         bq_df = df[['hole_id', 'project_id', 'length', 'azimuth', 'inclination', 'survey_type', 'upload_date']]
         
-        # 3. Upload to BQ
+        # 7. Final failsafe to strip any accidental duplicate columns 
+        bq_df = bq_df.loc[:, ~bq_df.columns.duplicated()]
+        
+        # 8. Upload!
         job = self.client.load_table_from_dataframe(bq_df, f"{self.dataset}.surveys")
         job.result()
         return len(bq_df)
