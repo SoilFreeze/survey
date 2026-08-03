@@ -242,7 +242,7 @@ class BigQueryDB:
 
     def import_downhole(self, df, survey_type, date_override=None):
         """Deletes existing survey data ONLY for the holes in this file, then uploads new points."""
-        if df.empty or not self.client: return 0
+        if df.empty or not self.client: return 0, []
         
         final_date = date_override if date_override else datetime.now().strftime("%Y-%m-%d")
         
@@ -251,17 +251,23 @@ class BigQueryDB:
         df['survey_type'] = survey_type
         df['upload_date'] = pd.to_datetime(final_date).date() 
         
-        # 2. Safely map the hole ID FIRST so we know which holes to delete
+        # 2. Map ID correctly
         if 'clean_ID' in df.columns:
             df['hole_id'] = df['clean_ID']
         elif 'ID' in df.columns:
             df['hole_id'] = df['ID']
             
-        # Extract the unique holes in this specific file
-        df['hole_id'] = df['hole_id'].astype(str)
+        # Ensure it is a string and drop any empty/NaN IDs from the CSV
+        df['hole_id'] = df['hole_id'].astype(str).str.strip()
+        df = df[df['hole_id'] != 'nan']
+        df = df[df['hole_id'] != '']
+        
         unique_holes = df['hole_id'].unique().tolist()
+        
+        if not unique_holes:
+            return 0, []
             
-        # 3. Clear out old data ONLY for the specific holes being uploaded today
+        # 3. Clear out old data ONLY for the specific holes in this file on this date
         delete_query = f"""
             DELETE FROM `{self.dataset}.surveys`
             WHERE project_id = @project_id 
@@ -281,22 +287,23 @@ class BigQueryDB:
         rename_map = {'Length': 'length', 'Azimuth': 'azimuth', 'Inclination': 'inclination'}
         df = df.rename(columns=rename_map)
         
-        # 5. Failsafe for missing columns & blank cells (NaNs)
+        # 5. Failsafe for missing columns & blank cells
         for col in ['length', 'azimuth', 'inclination']:
             if col not in df.columns:
                 df[col] = 0.0
-            df[col] = df[col].fillna(0.0) 
+            # Force to numeric, replacing any random text with 0.0
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0) 
             
         # 6. Extract only the columns BigQuery wants
         bq_df = df[['hole_id', 'project_id', 'length', 'azimuth', 'inclination', 'survey_type', 'upload_date']]
-        
-        # 7. Final failsafe to strip any accidental duplicate columns 
         bq_df = bq_df.loc[:, ~bq_df.columns.duplicated()]
         
-        # 8. Upload!
+        # 7. Upload
         job = self.client.load_table_from_dataframe(bq_df, f"{self.dataset}.surveys")
         job.result()
-        return len(bq_df)
+        
+        # Return the row count AND the list of unique holes so the UI can prove it
+        return len(bq_df), unique_holes
 
     def get_surveyed_ids(self):
         query = f"SELECT DISTINCT hole_id FROM `{self.dataset}.surveys` WHERE project_id = @pid ORDER BY hole_id"
