@@ -157,7 +157,10 @@ class BigQueryDB:
         """Updates the 'actual' top coordinates and survey date for existing holes."""
         if df.empty or not self.client: return 0
         df['project_id'] = self.active_project_id
-        df['top_survey_date'] = pd.to_datetime(date_str).date()
+        
+        # FIX: Force the date to a string to match BigQuery's STRING data type
+        df['top_survey_date'] = pd.to_datetime(date_str).strftime('%Y-%m-%d')
+        
         df = df.rename(columns={'clean_ID': 'hole_id', 'North': 'actual_n', 'East': 'actual_e', 'Elev': 'actual_z'})
         
         bq_df = df[['hole_id', 'project_id', 'actual_n', 'actual_e', 'actual_z', 'top_survey_date']]
