@@ -3,7 +3,7 @@ import pandas as pd
 import io
 
 # Import your existing engines and the new BigQuery DB class
-from math_engine_2 import SurveyMath
+from math_engine import SurveyMath
 from visualizer import SurveyVisualizer
 from bigquery_db import BigQueryDB  # The file we created in the previous step
 
