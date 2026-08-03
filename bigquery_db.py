@@ -112,6 +112,29 @@ class BigQueryDB:
             print(f"BigQuery fetch failed: {e}")
             return pd.DataFrame(), pd.DataFrame()
 
+    def get_project_stats(self):
+        """Fetches quick summary statistics for the active project."""
+        if not self.client: return {"total": 0, "top": 0, "downhole": 0}
+        
+        query = f"""
+            SELECT 
+                (SELECT COUNT(*) FROM `{self.dataset}.holes` WHERE project_id = @pid) as total_holes,
+                (SELECT COUNT(*) FROM `{self.dataset}.holes` WHERE project_id = @pid AND has_top_survey = 1) as top_survey_holes,
+                (SELECT COUNT(DISTINCT hole_id) FROM `{self.dataset}.surveys` WHERE project_id = @pid) as downhole_holes
+        """
+        params = [bigquery.ScalarQueryParameter("pid", "STRING", self.active_project_id)]
+        try:
+            res = self.client.query(query, job_config=bigquery.QueryJobConfig(query_parameters=params)).result()
+            row = next(res)
+            return {
+                "total": row['total_holes'],
+                "top": row['top_survey_holes'],
+                "downhole": row['downhole_holes']
+            }
+        except Exception as e:
+            st.error(f"Failed to fetch stats: {e}")
+            return {"total": 0, "top": 0, "downhole": 0}
+    
     def import_baseline(self, df):
         """Replaces existing holes with new baseline design data."""
         if df.empty: return 0
