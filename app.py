@@ -19,18 +19,41 @@ def get_engines():
 math, vis = get_engines()
 
 # 3. Sidebar - Project & Database Connection
+# Initialize DB with a dummy project ID first just to connect
+db = BigQueryDB(project_id="temp") 
+
 with st.sidebar:
     st.header("1. Project Settings")
-    # For now, manually type the project ID (e.g., "2329a"). 
-    # Later, we can fetch this list dynamically from the 'projects' table.
-    active_project = st.text_input("Active Project ID:", value="2329a")
+    
+    # Fetch existing projects
+    existing_projects = db.get_all_projects()
+    
+    # Use a selectbox instead of text input
+    active_project = st.selectbox("Active Project ID:", options=existing_projects, index=0 if existing_projects else None)
     
     if active_project:
-        db = BigQueryDB(project_id=active_project)
+        db.active_project_id = active_project
         st.success(f"Connected to project: {active_project}")
     else:
-        st.warning("Please enter a Project ID.")
-        st.stop()
+        st.warning("No projects found. Please create one below.")
+        
+    # Form to create a new project
+    with st.expander("➕ Create New Project"):
+        with st.form("new_project_form", clear_on_submit=True):
+            new_pid = st.text_input("Project ID (e.g., 2329a)")
+            new_pname = st.text_input("Project Name")
+            new_n = st.number_input("Origin North (Y)", value=0.0)
+            new_e = st.number_input("Origin East (X)", value=0.0)
+            submit_btn = st.form_submit_button("Create Project")
+            
+            if submit_btn:
+                if new_pid and new_pname:
+                    success = db.create_new_project(new_pid, new_pname, new_n, new_e)
+                    if success:
+                        st.success(f"Project '{new_pid}' created successfully!")
+                        st.rerun() # Refresh the app to update the dropdown list
+                else:
+                    st.error("Project ID and Name are required.")
 
     st.divider()
     
