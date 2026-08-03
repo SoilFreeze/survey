@@ -188,24 +188,33 @@ with tab_maps:
                 st.warning("No hole data found for this project. Please import a Baseline first.")
             else:
                 try:
+                    # 1. Fetch origin from the database universally
+                    proj_query = f"SELECT origin_north, origin_east FROM `{db.dataset}.projects` WHERE project_id = @pid"
+                    params = [bigquery.ScalarQueryParameter("pid", "STRING", db.active_project_id)]
+                    proj_res = list(db.client.query(proj_query, job_config=bigquery.QueryJobConfig(query_parameters=params)).result())
+                    
+                    db_orig_n = proj_res[0]['origin_north'] if proj_res else 0.0
+                    db_orig_e = proj_res[0]['origin_east'] if proj_res else 0.0
+                    
+                    orig_n = db_orig_n if db_orig_n != 0.0 else holes_df['n_base'].mean()
+                    orig_e = db_orig_e if db_orig_e != 0.0 else holes_df['e_base'].mean()
+                    
+                    # 2. Safely fallback any accidental 0.0 actuals to the design base so they don't draw 5-million-foot lines
+                    holes_df.loc[holes_df['n_top'] == 0.0, 'n_top'] = holes_df['n_base']
+                    holes_df.loc[holes_df['e_top'] == 0.0, 'e_top'] = holes_df['e_base']
+                    
+                    # 3. Shift ALL coordinates universally before ANY map draws
+                    holes_df['n_base'] = holes_df['n_base'] - orig_n
+                    holes_df['e_base'] = holes_df['e_base'] - orig_e
+                    holes_df['n_top'] = holes_df['n_top'] - orig_n
+                    holes_df['e_top'] = holes_df['e_top'] - orig_e
+                    
                     fig = None
                     
+                    # 4. Render the chosen map
                     if map_type == "Plan View (Design vs Actual)":
-                        proj_query = f"SELECT origin_north, origin_east FROM `{db.dataset}.projects` WHERE project_id = @pid"
-                        params = [bigquery.ScalarQueryParameter("pid", "STRING", db.active_project_id)]
-                        proj_res = list(db.client.query(proj_query, job_config=bigquery.QueryJobConfig(query_parameters=params)).result())
-                        
-                        orig_n = proj_res[0]['origin_north'] if proj_res else 0.0
-                        orig_e = proj_res[0]['origin_east'] if proj_res else 0.0
-                        
                         top_df = holes_df.copy()
-                        top_df['Design_N'] = top_df['n_base'] - orig_n
-                        top_df['Design_E'] = top_df['e_base'] - orig_e
-                        
-                        top_df['Actual_N'] = top_df['n_top'].fillna(top_df['n_base']) - orig_n
-                        top_df['Actual_E'] = top_df['e_top'].fillna(top_df['e_base']) - orig_e
-                        
-                        top_df = top_df.rename(columns={'clean_id': 'ID'})
+                        top_df = top_df.rename(columns={'clean_id': 'ID', 'n_base': 'Design_N', 'e_base': 'Design_E', 'n_top': 'Actual_N', 'e_top': 'Actual_E'})
                         fig = vis.plot_top_deviation_map(top_df)
                         
                     elif map_type == "Grid Heatmap":
@@ -227,7 +236,10 @@ with tab_maps:
                                 'hole_id': 'ID', 'n_base': 'Start_N', 'e_base': 'Start_E',
                                 'depth': 'Elevation'
                             })
-                            needles_df['End_N'] = needles_df['Start_N']
+                            # Polyfill for visualizer requirements
+                            needles_df['Collar_N'] = needles_df['Start_N']
+                            needles_df['Collar_E'] = needles_df['Start_E']
+                            needles_df['End_N'] = needles_df['Start_N'] 
                             needles_df['End_E'] = needles_df['Start_E']
                             fig = vis.plot_deviation_needles(needles_df)
                             
