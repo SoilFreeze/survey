@@ -93,14 +93,18 @@ with st.sidebar:
                 if st.button(f"Confirm & Upload {import_type} to BigQuery"):
                     with st.spinner("Uploading to BigQuery..."):
                         if import_type in ["Casing", "Pipe"]:
-                            # We extract the date, or use today's date, and push via our new BigQueryDB class
                             upload_date = pd.Timestamp.now().strftime("%Y-%m-%d")
-                            # Alias the columns to match BigQuery schema expectations
                             df = df.rename(columns={'ID': 'hole_id', 'Length': 'length', 'Azimuth': 'azimuth', 'Inclination': 'inclination'})
                             rows_inserted = db.import_downhole(df, import_type, upload_date)
                             st.success(f"Successfully uploaded {rows_inserted} rows to {import_type}!")
-                        else:
-                            st.info("Baseline/Top Survey logic needs to be mapped to the new holes table schema.")
+                            
+                        elif import_type == "Baseline":
+                            rows_inserted = db.import_baseline(df)
+                            st.success(f"Successfully uploaded {rows_inserted} Baseline records!")
+                            
+                        elif import_type == "Top Survey":
+                            rows_inserted = db.update_top_survey(df)
+                            st.success(f"Successfully updated {rows_inserted} Top Survey records!")
                             
         except Exception as e:
             st.error(f"Error processing file: {e}")
