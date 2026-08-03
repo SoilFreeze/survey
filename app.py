@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import io
+import re
 
 # Import your existing engines and the new BigQuery DB class
 from math_engine import SurveyMath
@@ -60,20 +61,19 @@ with st.sidebar:
     # 4. Sidebar - Data Import
     st.header("2. Import Data")
     import_type = st.selectbox("Select Data Type to Import:", 
-                               ["Top Survey", "Casing", "Pipe", "Baseline"])
+                               ["Baseline", "Top Survey", "Casing", "Pipe", "Pipe Details"])
     
     uploaded_file = st.file_uploader(f"Upload {import_type} CSV", type=["csv"])
     
     if uploaded_file is not None:
         try:
-            # Read and normalize the CSV
             df = pd.read_csv(uploaded_file)
             
-            # Use the existing mapping logic from your original GUI
+            # Expanded mapping to include CADX, CADY, and Pipe words
             col_map = {
-                'id': ["id", "hole_id", "holeid", "hole", "point", "name", "station", "loc"],
-                'n': ["north", "northing", "n", "y", "northings"],
-                'e': ["east", "easting", "e", "x", "eastings"],
+                'id': ["id", "hole_id", "holeid", "hole", "point", "name", "station", "loc", "pipe"],
+                'n': ["north", "northing", "n", "y", "northings", "cady"],
+                'e': ["east", "easting", "e", "x", "eastings", "cadx"],
                 'z': ["elev", "elevation", "z", "rl", "level", "height"],
                 'az': ['azimuth', 'azi', 'az', 'dir', 'direction'],
                 'inc': ['inclination', 'inc', 'dip', 'angle'],
@@ -89,22 +89,37 @@ with st.sidebar:
                 st.write("Preview of Normalized Data:")
                 st.dataframe(df.head())
                 
-                # Import Logic based on selection
+                # Function to grab date from filename (YYYY-MM-DD or MM-DD-YYYY)
+                def extract_date_from_filename(filename):
+                    match = re.search(r'(\d{4})[._-](\d{2})[._-](\d{2})', filename)
+                    if match: return f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
+                    match = re.search(r'(\d{2})[._-](\d{2})[._-](\d{4})', filename)
+                    if match: return f"{match.group(3)}-{match.group(1)}-{match.group(2)}"
+                    return pd.Timestamp.now().strftime("%Y-%m-%d")
+                    
+                file_date = extract_date_from_filename(uploaded_file.name)
+                
                 if st.button(f"Confirm & Upload {import_type} to BigQuery"):
                     with st.spinner("Uploading to BigQuery..."):
+                        
                         if import_type in ["Casing", "Pipe"]:
-                            upload_date = pd.Timestamp.now().strftime("%Y-%m-%d")
                             df = df.rename(columns={'ID': 'hole_id', 'Length': 'length', 'Azimuth': 'azimuth', 'Inclination': 'inclination'})
-                            rows_inserted = db.import_downhole(df, import_type, upload_date)
-                            st.success(f"Successfully uploaded {rows_inserted} rows to {import_type}!")
+                            rows_inserted = db.import_downhole(df, import_type, file_date)
+                            st.success(f"Successfully uploaded {rows_inserted} rows to {import_type} (Date: {file_date})!")
                             
                         elif import_type == "Baseline":
                             rows_inserted = db.import_baseline(df)
                             st.success(f"Successfully uploaded {rows_inserted} Baseline records!")
                             
                         elif import_type == "Top Survey":
-                            rows_inserted = db.update_top_survey(df)
-                            st.success(f"Successfully updated {rows_inserted} Top Survey records!")
+                            rows_inserted = db.update_top_survey(df, file_date)
+                            st.success(f"Successfully updated {rows_inserted} Top Survey records (Date: {file_date})!")
+                            
+                        elif import_type == "Pipe Details":
+                            # Force any column named 'Type' to become 'pipe_type'
+                            df.rename(columns=lambda x: 'pipe_type' if x.strip().lower() == 'type' else x, inplace=True)
+                            rows_inserted = db.import_pipe_details(df)
+                            st.success(f"Successfully updated {rows_inserted} Pipe Details!")
                             
         except Exception as e:
             st.error(f"Error processing file: {e}")
