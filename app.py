@@ -156,7 +156,16 @@ with tab_data:
 with tab_maps:
     st.subheader("Map & Spatial Visualizations")
     
-    if st.button("Generate Visualizations"):
+    # Initialize your visualizer engine
+    vis = SurveyVisualizer()
+    
+    # Choose which map type to render
+    map_type = st.selectbox(
+        "Select Map Type:",
+        ["Plan View (Design vs Actual)", "Grid Heatmap", "Pipe Heatmap", "Deviation Needles"]
+    )
+    
+    if st.button("Generate Map"):
         with st.spinner("Fetching data and rendering plots..."):
             holes_df, surveys_df = db.get_all_data()
             
@@ -164,21 +173,50 @@ with tab_maps:
                 st.warning("No hole data found for this project. Please import a Baseline first.")
             else:
                 try:
-                    # Pass your data into your visualizer engine
-                    # (Adjust method names if your visualizer class uses different triggers)
-                    fig = vis.generate_map(holes_df, surveys_df)
+                    fig = None
+                    
+                    if map_type == "Plan View (Design vs Actual)":
+                        # Prepare top_vectors_df schema for the visualizer
+                        top_df = holes_df.rename(columns={
+                            'clean_id': 'ID', 'n_base': 'Design_N', 'e_base': 'Design_E',
+                            'n_top': 'Actual_N', 'e_top': 'Actual_E'
+                        })
+                        # Fallback actuals to design if actual is null
+                        top_df['Actual_N'] = top_df['Actual_N'].fillna(top_df['Design_N'])
+                        top_df['Actual_E'] = top_df['Actual_E'].fillna(top_df['Design_E'])
+                        fig = vis.plot_top_deviation_map(top_df)
+                        
+                    elif map_type == "Grid Heatmap":
+                        # Format dataframe for grid heatmap method
+                        grid_df = holes_df.rename(columns={'clean_id': 'ID', 'n_base': 'North', 'e_base': 'East'})
+                        grid_df['Survey_Status'] = grid_df['has_top_survey'].apply(lambda x: 'Pipe' if x == 1 else 'Baseline')
+                        fig = vis.generate_grid_heatmap(grid_df, depth_label="Surface", show_labels=True)
+                        
+                    elif map_type == "Pipe Heatmap":
+                        pipe_df = holes_df.rename(columns={'clean_id': 'ID', 'n_base': 'North', 'e_base': 'East'})
+                        pipe_df['Survey_Status'] = 'Pipe'
+                        fig = vis.generate_pipe_heatmap(pipe_df, depth_label="Surface", show_labels=True)
+                        
+                    elif map_type == "Deviation Needles":
+                        # Check if we have survey data points
+                        if surveys_df.empty:
+                            st.warning("Deviation needles require downhole survey data. Please import Pipe surveys first.")
+                        else:
+                            # Map surveys_df and holes_df together for needle plot
+                            needles_df = surveys_df.merge(holes_df[['id', 'n_base', 'e_base']], left_on='hole_id', right_on='id')
+                            needles_df = needles_df.rename(columns={
+                                'hole_id': 'ID', 'n_base': 'Start_N', 'e_base': 'Start_E',
+                                'depth': 'Elevation' # depending on your coordinate scale
+                            })
+                            needles_df['End_N'] = needles_df['Start_N'] # simplified vector ends if local
+                            needles_df['End_E'] = needles_df['Start_E']
+                            fig = vis.plot_deviation_needles(needles_df)
+                            
                     if fig:
                         st.pyplot(fig)
                     else:
-                        st.info("Visualizer engine executed, but no figure was returned.")
-                except AttributeError:
-                    # Fallback if visualizer method has a different name
-                    st.error("The visualizer engine method for generating maps needs to be linked. Check your visualizer.py class methods.")
-                    
-                    # Quick fallback scatter plot using native Streamlit if visualizer isn't ready
-                    st.write("Fallback Plan View (Design North vs Design East):")
-                    if 'design_n' in holes_df.columns and 'design_e' in holes_df.columns:
-                        st.scatter_chart(holes_df, x='design_e', y='design_n', color='hole_id')
+                        st.info("The selected map type returned no plot data.")
+                        
                 except Exception as e:
                     st.error(f"Error rendering visualization: {e}")
             
