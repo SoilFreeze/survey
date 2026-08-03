@@ -7,6 +7,7 @@ import re
 from math_engine import SurveyMath
 from visualizer import SurveyVisualizer
 from bigquery_db import BigQueryDB  # The file we created in the previous step
+from google.cloud import bigquery
 
 # 1. Page Configuration
 st.set_page_config(page_title="Survey Management System", layout="wide")
@@ -156,10 +157,8 @@ with tab_data:
 with tab_maps:
     st.subheader("Map & Spatial Visualizations")
     
-    # Initialize your visualizer engine
     vis = SurveyVisualizer()
     
-    # Choose which map type to render
     map_type = st.selectbox(
         "Select Map Type:",
         ["Plan View (Design vs Actual)", "Grid Heatmap", "Pipe Heatmap", "Deviation Needles"]
@@ -175,8 +174,7 @@ with tab_maps:
                 try:
                     fig = None
                     
-                    elif map_type == "Plan View (Design vs Actual)":
-                        # Fetch project origin from database to center coordinates properly
+                    if map_type == "Plan View (Design vs Actual)":
                         proj_query = f"SELECT origin_north, origin_east FROM `{db.dataset}.projects` WHERE project_id = @pid"
                         params = [bigquery.ScalarQueryParameter("pid", "STRING", db.active_project_id)]
                         proj_res = list(db.client.query(proj_query, job_config=bigquery.QueryJobConfig(query_parameters=params)).result())
@@ -184,10 +182,7 @@ with tab_maps:
                         orig_n = proj_res[0]['origin_north'] if proj_res else 0.0
                         orig_e = proj_res[0]['origin_east'] if proj_res else 0.0
                         
-                        # Prepare top_vectors_df and shift by project origin (or fallback to design base)
                         top_df = holes_df.copy()
-                        
-                        # Calculate relative offsets (Actual vs Design or Origin)
                         top_df['Design_N'] = top_df['n_base'] - orig_n
                         top_df['Design_E'] = top_df['e_base'] - orig_e
                         
@@ -198,7 +193,6 @@ with tab_maps:
                         fig = vis.plot_top_deviation_map(top_df)
                         
                     elif map_type == "Grid Heatmap":
-                        # Format dataframe for grid heatmap method
                         grid_df = holes_df.rename(columns={'clean_id': 'ID', 'n_base': 'North', 'e_base': 'East'})
                         grid_df['Survey_Status'] = grid_df['has_top_survey'].apply(lambda x: 'Pipe' if x == 1 else 'Baseline')
                         fig = vis.generate_grid_heatmap(grid_df, depth_label="Surface", show_labels=True)
@@ -209,17 +203,15 @@ with tab_maps:
                         fig = vis.generate_pipe_heatmap(pipe_df, depth_label="Surface", show_labels=True)
                         
                     elif map_type == "Deviation Needles":
-                        # Check if we have survey data points
                         if surveys_df.empty:
                             st.warning("Deviation needles require downhole survey data. Please import Pipe surveys first.")
                         else:
-                            # Map surveys_df and holes_df together for needle plot
                             needles_df = surveys_df.merge(holes_df[['id', 'n_base', 'e_base']], left_on='hole_id', right_on='id')
                             needles_df = needles_df.rename(columns={
                                 'hole_id': 'ID', 'n_base': 'Start_N', 'e_base': 'Start_E',
-                                'depth': 'Elevation' # depending on your coordinate scale
+                                'depth': 'Elevation'
                             })
-                            needles_df['End_N'] = needles_df['Start_N'] # simplified vector ends if local
+                            needles_df['End_N'] = needles_df['Start_N']
                             needles_df['End_E'] = needles_df['Start_E']
                             fig = vis.plot_deviation_needles(needles_df)
                             
