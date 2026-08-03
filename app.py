@@ -175,15 +175,26 @@ with tab_maps:
                 try:
                     fig = None
                     
-                    if map_type == "Plan View (Design vs Actual)":
-                        # Prepare top_vectors_df schema for the visualizer
-                        top_df = holes_df.rename(columns={
-                            'clean_id': 'ID', 'n_base': 'Design_N', 'e_base': 'Design_E',
-                            'n_top': 'Actual_N', 'e_top': 'Actual_E'
-                        })
-                        # Fallback actuals to design if actual is null
-                        top_df['Actual_N'] = top_df['Actual_N'].fillna(top_df['Design_N'])
-                        top_df['Actual_E'] = top_df['Actual_E'].fillna(top_df['Design_E'])
+                    elif map_type == "Plan View (Design vs Actual)":
+                        # Fetch project origin from database to center coordinates properly
+                        proj_query = f"SELECT origin_north, origin_east FROM `{db.dataset}.projects` WHERE project_id = @pid"
+                        params = [bigquery.ScalarQueryParameter("pid", "STRING", db.active_project_id)]
+                        proj_res = list(db.client.query(proj_query, job_config=bigquery.QueryJobConfig(query_parameters=params)).result())
+                        
+                        orig_n = proj_res[0]['origin_north'] if proj_res else 0.0
+                        orig_e = proj_res[0]['origin_east'] if proj_res else 0.0
+                        
+                        # Prepare top_vectors_df and shift by project origin (or fallback to design base)
+                        top_df = holes_df.copy()
+                        
+                        # Calculate relative offsets (Actual vs Design or Origin)
+                        top_df['Design_N'] = top_df['n_base'] - orig_n
+                        top_df['Design_E'] = top_df['e_base'] - orig_e
+                        
+                        top_df['Actual_N'] = top_df['n_top'].fillna(top_df['n_base']) - orig_n
+                        top_df['Actual_E'] = top_df['e_top'].fillna(top_df['e_base']) - orig_e
+                        
+                        top_df = top_df.rename(columns={'clean_id': 'ID'})
                         fig = vis.plot_top_deviation_map(top_df)
                         
                     elif map_type == "Grid Heatmap":
