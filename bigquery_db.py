@@ -137,23 +137,23 @@ class BigQueryDB:
     
     def import_baseline(self, df):
         """Replaces existing holes with new baseline design data."""
-        if df.empty: return 0
+        if df.empty or not self.client: return 0
         
         df['project_id'] = self.active_project_id
+        
+        # FAILSAFE: Ensure required coordinate columns exist before renaming
+        for col in ['North', 'East', 'Elev', 'Azimuth', 'Inclination', 'Length']:
+            if col not in df.columns: 
+                df[col] = 0.0
+                
         df = df.rename(columns={
             'clean_ID': 'hole_id', 'North': 'design_n', 'East': 'design_e', 'Elev': 'design_z',
             'Azimuth': 'design_az', 'Inclination': 'design_inc', 'Length': 'design_length'
         })
         
-        # Ensure all columns exist
-        for col in ['design_az', 'design_inc', 'design_length']:
-            if col not in df.columns: df[col] = 0.0
-            
         bq_df = df[['hole_id', 'project_id', 'design_n', 'design_e', 'design_z', 'design_az', 'design_inc', 'design_length']]
         bq_df = bq_df.drop_duplicates(subset=['hole_id'], keep='last')
         
-        # BigQuery MERGE (UPSERT)
-        # Using a temporary table to handle the upsert logic cleanly
         temp_table = f"{self.dataset}.temp_holes_{datetime.now().strftime('%Y%m%d%H%M%S')}"
         job = self.client.load_table_from_dataframe(bq_df, temp_table)
         job.result()
@@ -172,7 +172,7 @@ class BigQueryDB:
         self._execute_query(merge_query)
         self.client.delete_table(temp_table, not_found_ok=True)
         return len(bq_df)
-
+        
     def update_baseline_safely(self, df):
         """In BigQuery, our MERGE query in import_baseline handles safe upserts automatically."""
         return self.import_baseline(df)
@@ -181,10 +181,13 @@ class BigQueryDB:
         """Updates the 'actual' top coordinates and survey date for existing holes."""
         if df.empty or not self.client: return 0
         df['project_id'] = self.active_project_id
-        
-        # FIX: Force the date to a string to match BigQuery's STRING data type
         df['top_survey_date'] = pd.to_datetime(date_str).strftime('%Y-%m-%d')
         
+        # FAILSAFE: Ensure coordinate columns exist before renaming
+        for col in ['North', 'East', 'Elev']:
+            if col not in df.columns: 
+                df[col] = 0.0
+                
         df = df.rename(columns={'clean_ID': 'hole_id', 'North': 'actual_n', 'East': 'actual_e', 'Elev': 'actual_z'})
         
         bq_df = df[['hole_id', 'project_id', 'actual_n', 'actual_e', 'actual_z', 'top_survey_date']]
@@ -204,7 +207,7 @@ class BigQueryDB:
         self._execute_query(merge_query)
         self.client.delete_table(temp_table, not_found_ok=True)
         return len(bq_df)
-
+        
     def import_pipe_details(self, df):
         """Updates the pipe_type and design_length for existing holes."""
         if df.empty or not self.client: return 0
