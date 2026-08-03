@@ -5,3 +5,4 @@ scipy
 matplotlib
 google-cloud-bigquery
 db-dtypes
+pyarrow
