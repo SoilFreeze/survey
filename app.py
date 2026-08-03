@@ -154,12 +154,33 @@ with tab_data:
             st.dataframe(surveys_df, use_container_width=True)
             
 with tab_maps:
-    st.subheader("Generate Map Visualizations")
-    col1, col2 = st.columns(2)
-    with col1:
-        target_elev = st.number_input("Target Elevation:", value=220.0, step=1.0)
-        if st.button("Generate Pipe Map"):
-            st.info("Visualizer integration coming next!")
+    st.subheader("Map & Spatial Visualizations")
+    
+    if st.button("Generate Visualizations"):
+        with st.spinner("Fetching data and rendering plots..."):
+            holes_df, surveys_df = db.get_all_data()
+            
+            if holes_df.empty:
+                st.warning("No hole data found for this project. Please import a Baseline first.")
+            else:
+                try:
+                    # Pass your data into your visualizer engine
+                    # (Adjust method names if your visualizer class uses different triggers)
+                    fig = vis.generate_map(holes_df, surveys_df)
+                    if fig:
+                        st.pyplot(fig)
+                    else:
+                        st.info("Visualizer engine executed, but no figure was returned.")
+                except AttributeError:
+                    # Fallback if visualizer method has a different name
+                    st.error("The visualizer engine method for generating maps needs to be linked. Check your visualizer.py class methods.")
+                    
+                    # Quick fallback scatter plot using native Streamlit if visualizer isn't ready
+                    st.write("Fallback Plan View (Design North vs Design East):")
+                    if 'design_n' in holes_df.columns and 'design_e' in holes_df.columns:
+                        st.scatter_chart(holes_df, x='design_e', y='design_n', color='hole_id')
+                except Exception as e:
+                    st.error(f"Error rendering visualization: {e}")
             
 with tab_qc:
     st.subheader("QC & Single Hole Analysis")
