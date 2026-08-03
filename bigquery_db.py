@@ -68,6 +68,38 @@ class BigQueryDB:
         except Exception as e:
             st.error(f"Failed to create project. It may already exist. Error: {e}")
             return False
+
+    def get_project_info(self):
+        """Fetches the metadata for the active project."""
+        if not self.client or not self.active_project_id: return None
+        query = f"SELECT project_id, name, origin_north, origin_east, default_length FROM `{self.dataset}.projects` WHERE project_id = @pid"
+        params = [bigquery.ScalarQueryParameter("pid", "STRING", self.active_project_id)]
+        try:
+            res = list(self.client.query(query, job_config=bigquery.QueryJobConfig(query_parameters=params)).result())
+            return res[0] if res else None
+        except Exception as e:
+            st.error(f"Failed to fetch project info: {e}")
+            return None
+
+    def update_project_origin(self, new_n, new_e):
+        """Updates the origin coordinates of the active project."""
+        if not self.client or not self.active_project_id: return False
+        query = f"""
+            UPDATE `{self.dataset}.projects`
+            SET origin_north = @orig_n, origin_east = @orig_e
+            WHERE project_id = @pid
+        """
+        params = [
+            bigquery.ScalarQueryParameter("orig_n", "FLOAT64", float(new_n)),
+            bigquery.ScalarQueryParameter("orig_e", "FLOAT64", float(new_e)),
+            bigquery.ScalarQueryParameter("pid", "STRING", self.active_project_id)
+        ]
+        try:
+            self._execute_query(query, params)
+            return True
+        except Exception as e:
+            st.error(f"Failed to update project: {e}")
+            return False
     
     def get_all_data(self):
         """Fetches holes and surveys, aliasing BQ schema back to legacy math engine schema."""
