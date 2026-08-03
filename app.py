@@ -129,17 +129,28 @@ tab_data, tab_maps, tab_qc = st.tabs(["Data & Analysis", "Map Visualizations", "
 
 with tab_data:
     st.subheader("Project Data Overview")
-    if st.button("Fetch Latest Data"):
+    
+    # 1. Fetch and display stats automatically (no button required)
+    stats = db.get_project_stats()
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total Holes", stats["total"])
+    col2.metric("Holes w/ Top Survey", stats["top"])
+    col3.metric("Holes w/ Downhole Survey", stats["downhole"])
+    
+    st.divider()
+    
+    # 2. Fetch data tables only when requested
+    if st.button("Fetch Latest Data (View Tables)"):
         with st.spinner("Querying BigQuery..."):
             holes_df, surveys_df = db.get_all_data()
-            col1, col2 = st.columns(2)
-            with col1:
-                st.write(f"**Holes:** {len(holes_df)} records")
-                st.dataframe(holes_df)
-            with col2:
-                st.write(f"**Surveys:** {len(surveys_df)} records")
-                st.dataframe(surveys_df)
-
+            
+            # Stacked vertically on their own lines
+            st.write(f"### Holes Data ({len(holes_df)} records)")
+            st.dataframe(holes_df, use_container_width=True)
+            
+            st.write(f"### Surveys Data ({len(surveys_df)} records)")
+            st.dataframe(surveys_df, use_container_width=True)
+            
 with tab_maps:
     st.subheader("Generate Map Visualizations")
     col1, col2 = st.columns(2)
