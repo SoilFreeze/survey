@@ -241,36 +241,42 @@ class BigQueryDB:
         return len(bq_df)
 
     def import_downhole(self, df, survey_type, date_override=None):
-        """Deletes existing survey of the same type/date, then bulk uploads new survey points."""
+        """Deletes existing survey data ONLY for the holes in this file, then uploads new points."""
         if df.empty or not self.client: return 0
         
         final_date = date_override if date_override else datetime.now().strftime("%Y-%m-%d")
         
-        # 1. Clear out old data for this exact survey
-        delete_query = f"""
-            DELETE FROM `{self.dataset}.surveys`
-            WHERE project_id = @project_id 
-              AND survey_type = @survey_type 
-              AND upload_date = CAST(@upload_date AS DATE)
-        """
-        params = [
-            bigquery.ScalarQueryParameter("project_id", "STRING", self.active_project_id),
-            bigquery.ScalarQueryParameter("survey_type", "STRING", survey_type),
-            bigquery.ScalarQueryParameter("upload_date", "STRING", final_date)
-        ]
-        self._execute_query(delete_query, params)
-
-        # 2. Append metadata
+        # 1. Append metadata
         df['project_id'] = self.active_project_id
         df['survey_type'] = survey_type
         df['upload_date'] = pd.to_datetime(final_date).date() 
         
-        # 3. Safely map the hole ID (preventing duplicates)
+        # 2. Safely map the hole ID FIRST so we know which holes to delete
         if 'clean_ID' in df.columns:
             df['hole_id'] = df['clean_ID']
         elif 'ID' in df.columns:
             df['hole_id'] = df['ID']
             
+        # Extract the unique holes in this specific file
+        df['hole_id'] = df['hole_id'].astype(str)
+        unique_holes = df['hole_id'].unique().tolist()
+            
+        # 3. Clear out old data ONLY for the specific holes being uploaded today
+        delete_query = f"""
+            DELETE FROM `{self.dataset}.surveys`
+            WHERE project_id = @project_id 
+              AND survey_type = @survey_type 
+              AND upload_date = CAST(@upload_date AS DATE)
+              AND hole_id IN UNNEST(@hole_ids)
+        """
+        params = [
+            bigquery.ScalarQueryParameter("project_id", "STRING", self.active_project_id),
+            bigquery.ScalarQueryParameter("survey_type", "STRING", survey_type),
+            bigquery.ScalarQueryParameter("upload_date", "STRING", final_date),
+            bigquery.ArrayQueryParameter("hole_ids", "STRING", unique_holes)
+        ]
+        self._execute_query(delete_query, params)
+
         # 4. Standardize required columns
         rename_map = {'Length': 'length', 'Azimuth': 'azimuth', 'Inclination': 'inclination'}
         df = df.rename(columns=rename_map)
@@ -279,7 +285,6 @@ class BigQueryDB:
         for col in ['length', 'azimuth', 'inclination']:
             if col not in df.columns:
                 df[col] = 0.0
-            # Fill blanks with 0.0 to prevent PyArrow conversion crashes
             df[col] = df[col].fillna(0.0) 
             
         # 6. Extract only the columns BigQuery wants
