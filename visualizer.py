@@ -9,16 +9,14 @@ from matplotlib.colors import ListedColormap, BoundaryNorm, LinearSegmentedColor
 from matplotlib.patches import Patch
 from matplotlib.lines import Line2D
 
+# Ensure matplotlib doesn't try to open desktop windows in a web environment
+import matplotlib
+matplotlib.use('Agg')
+
 class SurveyVisualizer:
-    def __init__(self):
-        # Define colors directly here
-        self.colors = {
-            'step_1': '#006400', 'step_2': '#008000', 'step_3': '#228B22',
-            'step_4': '#32CD32', 'step_5': '#90EE90', 'step_6': '#FFFFE0',
-            'step_7': '#FFFF00', 'step_8': '#FFD700', 'step_9': '#FFA500',
-            'step_10': '#FF8C00', 'step_11': '#FF4500', 'step_12': '#FF0000',
-            'step_13': '#800080'
-        }
+    def __init__(self, config_file='config.ini'):
+        self.config = configparser.ConfigParser()
+        self.read_config(config_file)
 
     def read_config(self, config_file):
         import sys, os
@@ -26,22 +24,8 @@ class SurveyVisualizer:
             app_path = os.path.dirname(sys.executable)
         else:
             app_path = os.path.dirname(os.path.abspath(__file__))
-            
-        config_path = os.path.join(app_path, config_file)
-        read_files = self.config.read(config_path)
-        
-        # Check if the file was successfully read
-        if read_files and 'HeatMapColors' in self.config:
-            self.colors = self.config['HeatMapColors']
-        else:
-            # Fallback dictionary if config.ini is missing
-            self.colors = {
-                'step_1': '#006400', 'step_2': '#008000', 'step_3': '#228B22',
-                'step_4': '#32CD32', 'step_5': '#90EE90', 'step_6': '#FFFFE0',
-                'step_7': '#FFFF00', 'step_8': '#FFD700', 'step_9': '#FFA500',
-                'step_10': '#FF8C00', 'step_11': '#FF4500', 'step_12': '#FF0000',
-                'step_13': '#800080'
-            }
+        self.config.read(os.path.join(app_path, config_file))
+        self.colors = self.config['HeatMapColors']
 
     def fix_color(self, color_name):
         c = str(color_name).split(';')[0].strip()
@@ -58,15 +42,7 @@ class SurveyVisualizer:
         colors = []
         for i in range(1, 14):
             key = f'step_{i}'
-            # Use .get() to access the dictionary safely
-            # If self.colors is a configparser object, this works; 
-            # if it's a dict, this also works.
             val = self.colors.get(key, '#808080')
-            
-            # If val is a SectionProxy (from configparser), convert to string
-            if hasattr(val, '__getitem__'): 
-                val = str(val)
-                
             colors.append(self.fix_color(val))
         return ListedColormap(colors)
 
@@ -116,12 +92,12 @@ class SurveyVisualizer:
             ax.annotate(str(txt), (e_coords[i], n_coords[i]), fontsize=8, xytext=(3, 3), textcoords='offset points', color='black', weight='normal', zorder=12)
 
     def plot_hole_comparison(self, comparison_df, hole_id, neighbors_dict=None, show_neighbor=False, hide_baseline=False, show_casing=True, plan_view_only=False):
-        if comparison_df.empty: return None  # <-- Added 'None'
-        return self._create_comparison_plot(comparison_df, hole_id, neighbors_dict, show_neighbor, hide_baseline, show_casing, plan_view_only, save_path=None) # <-- Added 'return'
+        if comparison_df.empty: return None
+        return self._create_comparison_plot(comparison_df, hole_id, neighbors_dict, show_neighbor, hide_baseline, show_casing, plan_view_only, save_path=None)
 
     def save_static_graph_to_file(self, comparison_df, hole_id, filepath, show_casing=True):
-        if comparison_df.empty: return
-        self._create_comparison_plot(comparison_df, hole_id, neighbors_dict=None, show_neighbor=False, hide_baseline=False, show_casing=show_casing, plan_view_only=False, save_path=filepath)
+        if comparison_df.empty: return None
+        return self._create_comparison_plot(comparison_df, hole_id, neighbors_dict=None, show_neighbor=False, hide_baseline=False, show_casing=show_casing, plan_view_only=False, save_path=filepath)
 
     def _create_comparison_plot(self, comparison_df, hole_id, neighbors_dict, show_neighbor, hide_baseline, show_casing, plan_view_only, save_path):
         max_n = comparison_df['dev_north'].abs().max(); max_e = comparison_df['dev_east'].abs().max()
@@ -195,11 +171,11 @@ class SurveyVisualizer:
         if save_path: 
             plt.savefig(save_path)
             plt.close(fig)
-        else: 
-            return fig  # <-- This must say 'return fig' instead of 'plt.show()'
+            return None
+        return fig
 
     def plot_batch_date_comparison(self, batch_df, date_str):
-        if batch_df.empty: return
+        if batch_df.empty: return None
         max_dev = max(batch_df['dev_north'].abs().max(), batch_df['dev_east'].abs().max())
         limit = 2.0 if max_dev < 2 else 2.0 + (np.ceil((max_dev - 2.0) / 0.25) * 0.25)
         fig, axs = plt.subplots(1, 3, figsize=(18, 6))
@@ -221,7 +197,8 @@ class SurveyVisualizer:
         axs[1].set_title("East Dev"); axs[1].set_xlim(-limit, limit)
         axs[2].set_title("North Dev"); axs[2].set_xlim(-limit, limit)
         if len(holes) <= 20: axs[0].legend(loc='upper right')
-        plt.tight_layout(); plt.show()
+        plt.tight_layout()
+        return fig
 
     def generate_grid_heatmap(self, df_at_depth, depth_label, grid_res=1.0, filter_surveyed=False, show_labels=False):
         if filter_surveyed: df_at_depth = df_at_depth[df_at_depth['Survey_Status'].isin(['Casing', 'Pipe'])]
@@ -238,8 +215,7 @@ class SurveyVisualizer:
         self._plot_markers(ax, df_at_depth, cmap, norm, 10, 'min_dist')
         if show_labels: self._add_labels(ax, df_at_depth, n, e)
         ax.set_title(f"Grid Map {depth_label}"); ax.axis('equal')
-        
-        return fig  # <-- Changed from plt.show()
+        return fig
 
     def generate_pipe_heatmap(self, df_at_depth, depth_label, filter_surveyed=False, show_labels=False, mode="Deviation (ft)"):
         if filter_surveyed: df_at_depth = df_at_depth[df_at_depth['Survey_Status'].isin(['Casing', 'Pipe'])]
@@ -259,14 +235,13 @@ class SurveyVisualizer:
         sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm); sm.set_array([])
         cbar = fig.colorbar(sm, ax=ax, label=label, extend='max')
         ax.set_title(f"Pipe Map {depth_label} [{mode}]"); ax.axis('equal')
-        
-        return fig  # <-- Changed from plt.show()
+        return fig
 
     def plot_deviation_needles(self, vectors_df, surveyed_only=False):
-        if vectors_df.empty: return
+        if vectors_df.empty: return None
         if surveyed_only:
             vectors_df = vectors_df[vectors_df['Status'] != 'Baseline']
-            if vectors_df.empty: return
+            if vectors_df.empty: return None
 
         colors = {268: 'red', 256: '#FFA500', 244: 'yellow', 232: 'green', 220: 'blue'}
         fig, ax = plt.subplots(figsize=(12, 12))
@@ -276,7 +251,6 @@ class SurveyVisualizer:
         temps = unique_holes[unique_holes['ID'].astype(str).str.startswith('T')]
         freeze = unique_holes[~unique_holes['ID'].astype(str).str.startswith('T')]
         
-        # Design Centers - ZORDER 100 to stay on TOP
         if not freeze.empty: ax.scatter(freeze['Start_E'], freeze['Start_N'], marker='+', color='grey', s=80, label='Design (Freeze)', zorder=100)
         if not temps.empty: ax.scatter(temps['Start_E'], temps['Start_N'], marker='^', color='black', facecolors='none', s=60, label='Design (Temp)', zorder=100)
         
@@ -300,10 +274,11 @@ class SurveyVisualizer:
         ax.axhline(center_n, c='k', ls='--', lw=1, alpha=0.5); ax.axvline(center_e, c='k', ls='--', lw=1, alpha=0.5)
         ax.set_xlabel("Easting"); ax.set_ylabel("Northing"); ax.axis('equal'); ax.grid(True, ls=':', alpha=0.3)
         ax.legend(loc='upper right', title="Legend")
-        plt.tight_layout(); plt.show()
+        plt.tight_layout()
+        return fig
 
     def plot_top_deviation_map(self, top_vectors_df):
-        if top_vectors_df.empty: return
+        if top_vectors_df.empty: return None
         fig, ax = plt.subplots(figsize=(12, 12))
         fig.suptitle("Top Deviation Map (Actual vs Design)", fontsize=16)
         
@@ -318,7 +293,6 @@ class SurveyVisualizer:
         if not temps.empty:
             ax.scatter(temps['Actual_E'], temps['Actual_N'], s=80, facecolors='none', edgecolors='blue', linewidth=1.5, label='Actual Top (Temp)', zorder=2)
             
-        # Design on TOP (zorder=100)
         ax.scatter(top_vectors_df['Design_E'], top_vectors_df['Design_N'], marker='+', color='black', s=80, label='Design Top', zorder=100)
             
         for _, row in top_vectors_df.iterrows():
