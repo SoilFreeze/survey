@@ -150,6 +150,7 @@ class BigQueryDB:
             if col not in df.columns: df[col] = 0.0
             
         bq_df = df[['hole_id', 'project_id', 'design_n', 'design_e', 'design_z', 'design_az', 'design_inc', 'design_length']]
+        bq_df = bq_df.drop_duplicates(subset=['hole_id'], keep='last')
         
         # BigQuery MERGE (UPSERT)
         # Using a temporary table to handle the upsert logic cleanly
@@ -187,6 +188,7 @@ class BigQueryDB:
         df = df.rename(columns={'clean_ID': 'hole_id', 'North': 'actual_n', 'East': 'actual_e', 'Elev': 'actual_z'})
         
         bq_df = df[['hole_id', 'project_id', 'actual_n', 'actual_e', 'actual_z', 'top_survey_date']]
+        bq_df = bq_df.drop_duplicates(subset=['hole_id'], keep='last')
         
         temp_table = f"{self.dataset}.temp_top_{datetime.now().strftime('%Y%m%d%H%M%S')}"
         job = self.client.load_table_from_dataframe(bq_df, temp_table)
@@ -215,6 +217,7 @@ class BigQueryDB:
         if 'design_length' not in df.columns: df['design_length'] = 200.0
             
         bq_df = df[['hole_id', 'project_id', 'pipe_type', 'design_length']]
+        bq_df = bq_df.drop_duplicates(subset=['hole_id'], keep='last')
         
         temp_table = f"{self.dataset}.temp_pipedetails_{datetime.now().strftime('%Y%m%d%H%M%S')}"
         job = self.client.load_table_from_dataframe(bq_df, temp_table)
