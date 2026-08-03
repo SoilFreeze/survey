@@ -153,12 +153,14 @@ class BigQueryDB:
         """In BigQuery, our MERGE query in import_baseline handles safe upserts automatically."""
         return self.import_baseline(df)
 
-    def update_top_survey(self, df):
-        """Updates the 'actual' top coordinates for existing holes."""
-        if df.empty: return 0
+    def update_top_survey(self, df, date_str):
+        """Updates the 'actual' top coordinates and survey date for existing holes."""
+        if df.empty or not self.client: return 0
         df['project_id'] = self.active_project_id
+        df['top_survey_date'] = pd.to_datetime(date_str).date()
         df = df.rename(columns={'clean_ID': 'hole_id', 'North': 'actual_n', 'East': 'actual_e', 'Elev': 'actual_z'})
-        bq_df = df[['hole_id', 'project_id', 'actual_n', 'actual_e', 'actual_z']]
+        
+        bq_df = df[['hole_id', 'project_id', 'actual_n', 'actual_e', 'actual_z', 'top_survey_date']]
         
         temp_table = f"{self.dataset}.temp_top_{datetime.now().strftime('%Y%m%d%H%M%S')}"
         job = self.client.load_table_from_dataframe(bq_df, temp_table)
@@ -169,7 +171,38 @@ class BigQueryDB:
             USING `{temp_table}` S
             ON T.hole_id = S.hole_id AND T.project_id = S.project_id
             WHEN MATCHED THEN
-              UPDATE SET actual_n = S.actual_n, actual_e = S.actual_e, actual_z = S.actual_z
+              UPDATE SET actual_n = S.actual_n, actual_e = S.actual_e, actual_z = S.actual_z, top_survey_date = S.top_survey_date
+        """
+        self._execute_query(merge_query)
+        self.client.delete_table(temp_table, not_found_ok=True)
+        return len(bq_df)
+
+    def import_pipe_details(self, df):
+        """Updates the pipe_type and design_length for existing holes."""
+        if df.empty or not self.client: return 0
+        
+        df['project_id'] = self.active_project_id
+        df = df.rename(columns={'clean_ID': 'hole_id', 'Length': 'design_length'})
+        
+        # Ensure columns exist to prevent crashes
+        if 'pipe_type' not in df.columns: df['pipe_type'] = "Unknown"
+        if 'design_length' not in df.columns: df['design_length'] = 200.0
+            
+        bq_df = df[['hole_id', 'project_id', 'pipe_type', 'design_length']]
+        
+        temp_table = f"{self.dataset}.temp_pipedetails_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        job = self.client.load_table_from_dataframe(bq_df, temp_table)
+        job.result()
+        
+        merge_query = f"""
+            MERGE `{self.dataset}.holes` T
+            USING `{temp_table}` S
+            ON T.hole_id = S.hole_id AND T.project_id = S.project_id
+            WHEN MATCHED THEN
+              UPDATE SET pipe_type = S.pipe_type, design_length = S.design_length
+            WHEN NOT MATCHED THEN
+              INSERT (hole_id, project_id, pipe_type, design_length)
+              VALUES (S.hole_id, S.project_id, S.pipe_type, S.design_length)
         """
         self._execute_query(merge_query)
         self.client.delete_table(temp_table, not_found_ok=True)
