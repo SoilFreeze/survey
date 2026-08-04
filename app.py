@@ -208,6 +208,9 @@ with tab_maps:
                     holes_df.loc[holes_df['n_top'] == 0.0, 'n_top'] = holes_df['n_base']
                     holes_df.loc[holes_df['e_top'] == 0.0, 'e_top'] = holes_df['e_base']
                     
+                    # --- NEW: Drop invalid (0.0) coordinates so they don't get shifted into the negative millions ---
+                    holes_df = holes_df[(holes_df['n_base'] != 0.0) & (holes_df['e_base'] != 0.0)].copy()
+                    
                     # 3. Shift ALL coordinates universally before ANY map draws
                     holes_df['n_base'] = holes_df['n_base'] - orig_n
                     holes_df['e_base'] = holes_df['e_base'] - orig_e
