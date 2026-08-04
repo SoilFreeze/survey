@@ -88,7 +88,6 @@ with st.sidebar:
         try:
             df = pd.read_csv(uploaded_file)
             
-            # Expanded mapping to include CADX, CADY, and Pipe words
             col_map = {
                 'id': ["id", "hole_id", "holeid", "hole", "point", "name", "station", "loc", "pipe"],
                 'n': ["north", "northing", "n", "y", "northings", "cady"],
@@ -108,7 +107,6 @@ with st.sidebar:
                 st.write("Preview of Normalized Data:")
                 st.dataframe(df.head())
                 
-                # Function to grab date from filename (YYYY-MM-DD or MM-DD-YYYY)
                 def extract_date_from_filename(filename):
                     match = re.search(r'(\d{4})[._-](\d{2})[._-](\d{2})', filename)
                     if match: return f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
@@ -118,31 +116,130 @@ with st.sidebar:
                     
                 file_date = extract_date_from_filename(uploaded_file.name)
                 
-                if st.button(f"Confirm & Upload {import_type} to BigQuery"):
-                    with st.spinner("Uploading to BigQuery..."):
+                # ---------------------------------------------------------
+                # NEW LOGIC: TOP SURVEY INTERACTIVE CONFLICT RESOLUTION
+                # ---------------------------------------------------------
+                if import_type == "Top Survey":
+                    # Step 1: Initial Check Button
+                    if 'conflict_df' not in st.session_state:
+                        if st.button("Check & Upload Top Survey"):
+                            with st.spinner("Checking database for coordinate conflicts..."):
+                                
+                                # Query BigQuery for existing raw actual coordinates
+                                query = f"""
+                                    SELECT hole_id, actual_n as db_n, actual_e as db_e, actual_z as db_z
+                                    FROM `{db.dataset}.holes`
+                                    WHERE project_id = @pid AND hole_id IN UNNEST(@ids)
+                                """
+                                params = [
+                                    bigquery.ScalarQueryParameter("pid", "STRING", db.active_project_id),
+                                    bigquery.ArrayQueryParameter("ids", "STRING", df['clean_ID'].astype(str).tolist())
+                                ]
+                                db_df = db.client.query(query, job_config=bigquery.QueryJobConfig(query_parameters=params)).to_dataframe()
+                                
+                                # Merge the new upload with the database data
+                                merged = df.merge(db_df, left_on='clean_ID', right_on='hole_id', how='left')
+                                conflicts = []
+                                clean_inserts = []
+                                
+                                # Sort holes into conflicts vs clean updates
+                                for _, row in merged.iterrows():
+                                    # If DB is empty, NULL, or 0.0, it's a clean insert
+                                    if pd.isna(row['db_n']) or row['db_n'] == 0.0:
+                                        clean_inserts.append(row['clean_ID'])
+                                    else:
+                                        # Calculate absolute differences (allowing 0.01ft floating point variance)
+                                        n_diff = abs(row['North'] - row['db_n'])
+                                        e_diff = abs(row['East'] - row['db_e'])
+                                        z_diff = abs(row['Elev'] - row['db_z'])
+                                        
+                                        if n_diff > 0.01 or e_diff > 0.01 or z_diff > 0.01:
+                                            conflicts.append(row)
+                                        else:
+                                            # Identical to database, overwrite silently
+                                            clean_inserts.append(row['clean_ID']) 
+                                            
+                                st.session_state.clean_inserts_df = df[df['clean_ID'].isin(clean_inserts)].copy()
+                                
+                                # Step 2: Trigger UI if conflicts exist
+                                if conflicts:
+                                    conflicts_df = pd.DataFrame(conflicts)
+                                    conflicts_df['Keep_New_Upload'] = True # Default to the new spreadsheet data
+                                    st.session_state.conflict_df = conflicts_df
+                                    st.rerun() 
+                                else:
+                                    # No conflicts detected, bypass the UI and update directly
+                                    rows = db.update_top_survey(df, file_date)
+                                    st.success(f"Successfully updated {rows} records silently!")
+                                    
+                    # Step 3: Render Conflict Resolution UI
+                    if 'conflict_df' in st.session_state:
+                        st.warning(f"⚠️ Found {len(st.session_state.conflict_df)} conflicting coordinates!")
+                        st.write("Existing database values differ from your upload. Uncheck **'Keep_New_Upload'** to discard the upload and keep the existing database values.")
                         
-                        # Updated to only look for "Pipe"
-                        if import_type == "Pipe":
-                            # We now catch both the row count and the unique hole list
-                            rows_inserted, unique_holes = db.import_downhole(df, import_type, file_date)
-                            st.success(f"Successfully processed {len(unique_holes)} specific holes ({rows_inserted} rows) for {import_type}!")
-                            st.info(f"The rest of your holes remain untouched. Holes updated: {', '.join(unique_holes)}")
-                            
-                        elif import_type == "Baseline":
-                            rows_inserted = db.import_baseline(df)
-                            st.success(f"Successfully uploaded {rows_inserted} Baseline records!")
-                            
-                        elif import_type == "Top Survey":
-                            rows_inserted = db.update_top_survey(df, file_date)
-                            st.success(f"Successfully updated {rows_inserted} Top Survey records (Date: {file_date})!")
-                            
-                        elif import_type == "Pipe Details":
-                            df.rename(columns=lambda x: 'pipe_type' if x.strip().lower() == 'type' else x, inplace=True)
-                            rows_inserted = db.import_pipe_details(df)
-                            st.success(f"Successfully updated {rows_inserted} Pipe Details!")
-                            
+                        # Format the dataframe for the interactive data editor
+                        disp_df = st.session_state.conflict_df[['clean_ID', 'North', 'db_n', 'East', 'db_e', 'Keep_New_Upload']].copy()
+                        disp_df = disp_df.rename(columns={'North': 'New_North', 'db_n': 'Old_North', 'East': 'New_East', 'db_e': 'Old_East'})
+                        
+                        # Render the interactive grid
+                        edited_conflicts = st.data_editor(disp_df, use_container_width=True, hide_index=True)
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if st.button("Finalize Upload", type="primary"):
+                                # Grab the IDs the user decided to keep from the new upload
+                                keep_new_ids = edited_conflicts[edited_conflicts['Keep_New_Upload'] == True]['clean_ID'].tolist()
+                                
+                                # Combine the conflict resolutions with the clean inserts
+                                final_df = df[
+                                    (df['clean_ID'].isin(st.session_state.clean_inserts_df['clean_ID'])) | 
+                                    (df['clean_ID'].isin(keep_new_ids))
+                                ]
+                                
+                                if not final_df.empty:
+                                    rows = db.update_top_survey(final_df, file_date)
+                                    st.success(f"Successfully resolved conflicts and updated {rows} total records!")
+                                else:
+                                    st.info("No records were selected for update.")
+                                    
+                                # Clean up session state
+                                del st.session_state.conflict_df
+                                del st.session_state.clean_inserts_df
+                                st.rerun()
+                                
+                        with col2:
+                            if st.button("Cancel Upload"):
+                                del st.session_state.conflict_df
+                                del st.session_state.clean_inserts_df
+                                st.rerun()
+                                
+                # ---------------------------------------------------------
+                # STANDARD LOGIC: ALL OTHER IMPORT TYPES
+                # ---------------------------------------------------------
+                else:
+                    # Clear top survey session state if user switches dropdown menus
+                    if 'conflict_df' in st.session_state: del st.session_state.conflict_df
+                    if 'clean_inserts_df' in st.session_state: del st.session_state.clean_inserts_df
+                    
+                    if st.button(f"Confirm & Upload {import_type} to BigQuery"):
+                        with st.spinner("Uploading to BigQuery..."):
+                            if import_type == "Pipe":
+                                rows_inserted, unique_holes = db.import_downhole(df, import_type, file_date)
+                                st.success(f"Successfully processed {len(unique_holes)} specific holes ({rows_inserted} rows) for {import_type}!")
+                                st.info(f"Holes updated: {', '.join(unique_holes)}")
+                                
+                            elif import_type == "Baseline":
+                                rows_inserted = db.import_baseline(df)
+                                st.success(f"Successfully uploaded {rows_inserted} Baseline records!")
+                                
+                            elif import_type == "Pipe Details":
+                                df.rename(columns=lambda x: 'pipe_type' if x.strip().lower() == 'type' else x, inplace=True)
+                                rows_inserted = db.import_pipe_details(df)
+                                st.success(f"Successfully updated {rows_inserted} Pipe Details!")
+                                
         except Exception as e:
             st.error(f"Error processing file: {e}")
+            
 # 5. Main App Tabs
 tab_data, tab_maps, tab_qc = st.tabs(["Data & Analysis", "Map Visualizations", "QC & Single Hole"])
 
