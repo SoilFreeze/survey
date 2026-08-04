@@ -210,7 +210,7 @@ class BigQueryDB:
         return self.import_baseline(df)
 
     def update_top_survey(self, df, date_str):
-        """Updates the 'actual' top coordinates and survey date for existing holes."""
+        """Updates actual coordinates, or inserts them if the hole does not yet exist."""
         if df.empty or not self.client: return 0
         df['project_id'] = self.active_project_id
         df['top_survey_date'] = pd.to_datetime(date_str).strftime('%Y-%m-%d')
@@ -222,6 +222,9 @@ class BigQueryDB:
                 
         df = df.rename(columns={'clean_ID': 'hole_id', 'North': 'actual_n', 'East': 'actual_e', 'Elev': 'actual_z'})
         
+        # Force hole_id to string to prevent BigQuery typecasting failures during the MERGE
+        df['hole_id'] = df['hole_id'].astype(str)
+        
         bq_df = df[['hole_id', 'project_id', 'actual_n', 'actual_e', 'actual_z', 'top_survey_date']]
         bq_df = bq_df.drop_duplicates(subset=['hole_id'], keep='last')
         
@@ -229,12 +232,16 @@ class BigQueryDB:
         job = self.client.load_table_from_dataframe(bq_df, temp_table)
         job.result()
         
+        # We added CAST to ensure string matching works perfectly, and the INSERT clause for missing holes
         merge_query = f"""
             MERGE `{self.dataset}.holes` T
             USING `{temp_table}` S
-            ON T.hole_id = S.hole_id AND T.project_id = S.project_id
+            ON CAST(T.hole_id AS STRING) = CAST(S.hole_id AS STRING) AND T.project_id = S.project_id
             WHEN MATCHED THEN
               UPDATE SET actual_n = S.actual_n, actual_e = S.actual_e, actual_z = S.actual_z, top_survey_date = S.top_survey_date
+            WHEN NOT MATCHED THEN
+              INSERT (hole_id, project_id, actual_n, actual_e, actual_z, top_survey_date)
+              VALUES (S.hole_id, S.project_id, S.actual_n, S.actual_e, S.actual_z, S.top_survey_date)
         """
         self._execute_query(merge_query)
         self.client.delete_table(temp_table, not_found_ok=True)
