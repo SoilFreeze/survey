@@ -180,6 +180,11 @@ with tab_maps:
         ["Plan View (Design vs Actual)", "Grid Heatmap", "Pipe Heatmap", "Deviation Needles"]
     )
     
+    # --- NEW: Add dynamic depth/elevation selectors OUTSIDE the button ---
+    target_elev = 0.0
+    if map_type in ["Grid Heatmap", "Pipe Heatmap"]:
+        target_elev = st.number_input("Target Elevation (Z)", value=-20.0, step=10.0, help="Enter the elevation slice (e.g., -20.0 for 20ft depth if collar is 0)")
+        
     if st.button("Generate Map"):
         with st.spinner("Fetching data and rendering plots..."):
             holes_df, surveys_df = db.get_all_data()
@@ -199,7 +204,7 @@ with tab_maps:
                     orig_n = db_orig_n if db_orig_n != 0.0 else holes_df['n_base'].mean()
                     orig_e = db_orig_e if db_orig_e != 0.0 else holes_df['e_base'].mean()
                     
-                    # 2. Safely fallback any accidental 0.0 actuals to the design base so they don't draw 5-million-foot lines
+                    # 2. Safely fallback any accidental 0.0 actuals to the design base
                     holes_df.loc[holes_df['n_top'] == 0.0, 'n_top'] = holes_df['n_base']
                     holes_df.loc[holes_df['e_top'] == 0.0, 'e_top'] = holes_df['e_base']
                     
@@ -211,6 +216,11 @@ with tab_maps:
                     
                     fig = None
                     
+                    # --- NEW: Calculate True Trajectories instead of polyfilling ---
+                    traj_df = pd.DataFrame()
+                    if map_type in ["Grid Heatmap", "Pipe Heatmap", "Deviation Needles"]:
+                        traj_df = math.calculate_trajectory(holes_df, surveys_df)
+                    
                     # 4. Render the chosen map
                     if map_type == "Plan View (Design vs Actual)":
                         top_df = holes_df.copy()
@@ -218,35 +228,42 @@ with tab_maps:
                         fig = vis.plot_top_deviation_map(top_df)
                         
                     elif map_type == "Grid Heatmap":
-                        grid_df = holes_df.rename(columns={'clean_id': 'ID', 'n_base': 'North', 'e_base': 'East'})
-                        grid_df['Survey_Status'] = grid_df['has_top_survey'].apply(lambda x: 'Pipe' if x == 1 else 'Baseline')
-                        fig = vis.generate_grid_heatmap(grid_df, depth_label="Surface", show_labels=True)
+                        if not traj_df.empty:
+                            slice_df = math.get_slice_at_elevation(traj_df, target_elev)
+                            if not slice_df.empty:
+                                fig = vis.generate_grid_heatmap(slice_df, depth_label=f"Elev {target_elev}", show_labels=True)
+                            else:
+                                st.warning(f"No trajectory data crosses elevation {target_elev}.")
+                        else:
+                            st.warning("No trajectory data calculated.")
                         
                     elif map_type == "Pipe Heatmap":
-                        pipe_df = holes_df.rename(columns={'clean_id': 'ID', 'n_base': 'North', 'e_base': 'East'})
-                        pipe_df['Survey_Status'] = 'Pipe'
-                        fig = vis.generate_pipe_heatmap(pipe_df, depth_label="Surface", show_labels=True)
+                        if not traj_df.empty:
+                            slice_df = math.get_slice_at_elevation(traj_df, target_elev)
+                            if not slice_df.empty:
+                                fig = vis.generate_pipe_heatmap(slice_df, depth_label=f"Elev {target_elev}", show_labels=True)
+                            else:
+                                st.warning(f"No trajectory data crosses elevation {target_elev}.")
+                        else:
+                            st.warning("No trajectory data calculated.")
                         
                     elif map_type == "Deviation Needles":
                         if surveys_df.empty:
                             st.warning("Deviation needles require downhole survey data. Please import Pipe surveys first.")
                         else:
-                            needles_df = surveys_df.merge(holes_df[['id', 'n_base', 'e_base']], left_on='hole_id', right_on='id')
-                            needles_df = needles_df.rename(columns={
-                                'hole_id': 'ID', 'n_base': 'Start_N', 'e_base': 'Start_E',
-                                'depth': 'Elevation'
-                            })
-                            # Polyfill for visualizer requirements
-                            needles_df['Collar_N'] = needles_df['Start_N']
-                            needles_df['Collar_E'] = needles_df['Start_E']
-                            needles_df['End_N'] = needles_df['Start_N'] 
-                            needles_df['End_E'] = needles_df['Start_E']
-                            fig = vis.plot_deviation_needles(needles_df)
+                            # Generate deviation vectors at 10-foot intervals based on the max depth
+                            max_depth = int(surveys_df['depth'].max()) if not surveys_df.empty else 100
+                            # Assumes downward trajectory (negative elevations)
+                            target_elevations = [float(-z) for z in range(10, max_depth + 10, 10)]
                             
+                            needles_df = math.get_multi_level_vectors(holes_df, surveys_df, target_elevations)
+                            if not needles_df.empty:
+                                fig = vis.plot_deviation_needles(needles_df)
+                            else:
+                                st.warning("No deviation vectors could be calculated.")
+                                
                     if fig:
                         st.pyplot(fig)
-                    else:
-                        st.info("The selected map type returned no plot data.")
                         
                 except Exception as e:
                     st.error(f"Error rendering visualization: {e}")
