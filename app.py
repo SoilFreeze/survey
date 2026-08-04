@@ -272,5 +272,93 @@ with tab_maps:
                     st.error(f"Error rendering visualization: {e}")
             
 with tab_qc:
-    st.subheader("QC & Single Hole Analysis")
-    st.info("Single hole graph integration coming next!")
+    st.subheader("Data Management & QA/QC")
+    
+    # Fetch fresh data for QC analysis
+    holes_df, surveys_df = db.get_all_data()
+    
+    if holes_df.empty:
+        st.info("No data available for QC analysis.")
+    else:
+        # -----------------------------------------
+        # TOOL 1: DATA ANOMALY FLAGS
+        # -----------------------------------------
+        st.markdown("### 🚩 Automated Data Flags")
+        
+        qc_col1, qc_col2 = st.columns(2)
+        
+        with qc_col1:
+            st.write("**Missing Coordinates or Incomplete Top Surveys**")
+            # Flag rows where coordinates are 0.0 or missing top surveys
+            missing_coords = holes_df[
+                (holes_df['n_base'] == 0.0) | 
+                (holes_df['e_base'] == 0.0) | 
+                (holes_df['has_top_survey'] == 0)
+            ].copy()
+            
+            if not missing_coords.empty:
+                st.dataframe(missing_coords[['id', 'n_base', 'e_base', 'n_top', 'e_top', 'has_top_survey']], use_container_width=True)
+            else:
+                st.success("All holes have valid base coordinates and top surveys!")
+
+        with qc_col2:
+            st.write("**Built vs Planned: High Collar Deviation (> 3 ft)**")
+            # Utilize the math engine to find massive actual vs design discrepancies
+            dev_df = math.get_top_deviation_vectors(holes_df)
+            if not dev_df.empty:
+                high_dev = dev_df[dev_df['Total_Deviation (ft)'] > 3.0].copy()
+                
+                # Add a tracking column for the backend schema mapping
+                high_dev['approve'] = "Pending Review"
+                
+                if not high_dev.empty:
+                    st.dataframe(high_dev, use_container_width=True)
+                else:
+                    st.success("No significant collar deviations detected.")
+            else:
+                st.info("Could not calculate deviation vectors.")
+
+        st.divider()
+
+        # -----------------------------------------
+        # TOOL 2: DATA DELETION MANAGEMENT
+        # -----------------------------------------
+        st.markdown("### 🗑️ Delete Bad Data")
+        
+        del_col1, del_col2 = st.columns(2)
+        
+        with del_col1:
+            st.write("**Delete Specific Survey Record**")
+            surveyed_holes = db.get_surveyed_ids()
+            
+            if surveyed_holes:
+                del_hole = st.selectbox("Select Hole:", options=surveyed_holes, key="del_hole")
+                if del_hole:
+                    details = db.get_hole_survey_details(del_hole)
+                    if details:
+                        # Format the dropdown to show Date, Type, and Point Count
+                        detail_opts = {f"{d['date']} - {d['type']} ({d['pts']} pts)": d for d in details}
+                        selected_key = st.selectbox("Select Survey to Delete:", options=list(detail_opts.keys()))
+                        selected_detail = detail_opts[selected_key]
+                        
+                        if st.button(f"Delete {selected_detail['type']} from {selected_detail['date']}", type="primary"):
+                            db.delete_survey_entry(del_hole, selected_detail['date'], selected_detail['type'])
+                            st.success(f"Survey for {del_hole} deleted successfully!")
+                            st.rerun()
+                    else:
+                        st.info("No survey data found for this specific hole.")
+            else:
+                st.info("No survey records available to delete.")
+                    
+        with del_col2:
+            st.write("**Delete Entire Upload Batch by Date**")
+            avail_dates = db.get_available_dates()
+            
+            if avail_dates:
+                del_date = st.selectbox("Select Upload Date:", options=avail_dates, key="del_date")
+                if st.button(f"Delete Entire Batch ({del_date})", type="primary"):
+                    db.delete_batch_by_date(del_date)
+                    st.success(f"All surveys from {del_date} have been removed!")
+                    st.rerun()
+            else:
+                st.info("No upload batches available to delete.")
