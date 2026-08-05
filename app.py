@@ -221,10 +221,22 @@ with st.sidebar:
                     if 'conflict_df' in st.session_state: del st.session_state.conflict_df
                     if 'clean_inserts_df' in st.session_state: del st.session_state.clean_inserts_df
                     
+                    # NEW UI: Ask for overwrite mode if it is a Pipe import
+                    pipe_overwrite_mode = "Append"
+                    if import_type == "Pipe":
+                        st.markdown("### Import Settings")
+                        mode_choice = st.radio(
+                            "Survey History Action:",
+                            ["Append (Keep History)", "Overwrite (Replace All Previous)"],
+                            help="Append will add this as a new survey. Overwrite will delete all older downhole surveys for the specific pipes in this file."
+                        )
+                        # Extract just the first word ('Append' or 'Overwrite') for the database function
+                        pipe_overwrite_mode = mode_choice.split()[0]
+                    
                     if st.button(f"Confirm & Upload {import_type} to BigQuery"):
                         with st.spinner("Uploading to BigQuery..."):
                             if import_type == "Pipe":
-                                rows_inserted, unique_holes = db.import_downhole(df, import_type, file_date)
+                                rows_inserted, unique_holes = db.import_downhole(df, import_type, file_date, overwrite_mode=pipe_overwrite_mode)
                                 st.success(f"Successfully processed {len(unique_holes)} specific holes ({rows_inserted} rows) for {import_type}!")
                                 st.info(f"Holes updated: {', '.join(unique_holes)}")
                                 
@@ -236,9 +248,6 @@ with st.sidebar:
                                 df.rename(columns=lambda x: 'pipe_type' if x.strip().lower() == 'type' else x, inplace=True)
                                 rows_inserted = db.import_pipe_details(df)
                                 st.success(f"Successfully updated {rows_inserted} Pipe Details!")
-                                
-        except Exception as e:
-            st.error(f"Error processing file: {e}")
             
 # 5. Main App Tabs
 tab_data, tab_maps, tab_qc, tab_explorer = st.tabs(["Data & Analysis", "Map Visualizations", "QC & Single Hole", "Survey Explorer"])
