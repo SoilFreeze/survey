@@ -266,6 +266,86 @@ with tab_data:
             
             st.write(f"### Surveys Data ({len(surveys_df)} records)")
             st.dataframe(surveys_df, use_container_width=True)
+
+    # -----------------------------------------
+    # ELEVATION SLICE EXPORT
+    # -----------------------------------------
+    st.divider()
+    st.subheader("📥 Export Elevation Slice")
+    st.write("Generate a CSV of pipe coordinates at a specific target elevation. Angled pipes without downhole surveys will follow their design inclination and azimuth from the collar.")
+
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
+        export_elev = st.number_input("Target Elevation (Z)", value=250.0, step=10.0)
+        
+    with col2:
+        st.write("") # Spacer to align button with input
+        st.write("")
+        if st.button("Calculate Slice Coordinates", type="primary"):
+            with st.spinner(f"Calculating trajectories down to Elev {export_elev}..."):
+                holes_df, surveys_df = db.get_all_data()
+
+                if not holes_df.empty:
+                    # 1. Fetch origin for coordinate shift calculations
+                    proj_query = f"SELECT origin_north, origin_east FROM `{db.dataset}.projects` WHERE project_id = @pid"
+                    params = [bigquery.ScalarQueryParameter("pid", "STRING", db.active_project_id)]
+                    proj_res = list(db.client.query(proj_query, job_config=bigquery.QueryJobConfig(query_parameters=params)).result())
+
+                    orig_n = proj_res[0]['origin_north'] if proj_res and proj_res[0]['origin_north'] != 0.0 else holes_df['n_base'].mean()
+                    orig_e = proj_res[0]['origin_east'] if proj_res and proj_res[0]['origin_east'] != 0.0 else holes_df['e_base'].mean()
+
+                    # 2. Filter out 0.0 bug coordinates and safely fallback to design base
+                    holes_df = holes_df[(holes_df['n_base'] != 0.0) & (holes_df['e_base'] != 0.0)].copy()
+                    holes_df.loc[holes_df['n_top'] == 0.0, 'n_top'] = holes_df['n_base']
+                    holes_df.loc[holes_df['e_top'] == 0.0, 'e_top'] = holes_df['e_base']
+
+                    # 3. Shift coordinates to local 0,0 for accurate math engine geometry
+                    holes_df['n_base'] = holes_df['n_base'] - orig_n
+                    holes_df['e_base'] = holes_df['e_base'] - orig_e
+                    holes_df['n_top'] = holes_df['n_top'] - orig_n
+                    holes_df['e_top'] = holes_df['e_top'] - orig_e
+
+                    # 4. Run the full trajectory and slice calculations
+                    traj_df = math.calculate_trajectory(holes_df, surveys_df)
+                    slice_df = math.get_slice_at_elevation(traj_df, export_elev)
+
+                    if not slice_df.empty:
+                        # 5. Shift back to absolute State Plane coordinates for the export
+                        slice_df['Absolute_East'] = slice_df['East_New'] + orig_e
+                        slice_df['Absolute_North'] = slice_df['North_New'] + orig_n
+                        
+                        # 6. Clean up the dataframe for the user
+                        export_df = slice_df[['ID', 'Target_Elev', 'Absolute_North', 'Absolute_East', 'Survey_Status', 'Deviation', 'Deviation_Percent']].copy()
+                        export_df = export_df.rename(columns={
+                            'Target_Elev': 'Elevation',
+                            'Absolute_North': 'Northing',
+                            'Absolute_East': 'Easting',
+                            'Survey_Status': 'Data_Source',
+                            'Deviation': 'Deviation_From_Design_ft'
+                        })
+                        
+                        # Round coordinates for cleaner output
+                        export_df['Northing'] = export_df['Northing'].round(3)
+                        export_df['Easting'] = export_df['Easting'].round(3)
+                        export_df['Deviation_From_Design_ft'] = export_df['Deviation_From_Design_ft'].round(3)
+
+                        st.success(f"Successfully calculated coordinates for {len(export_df)} pipes!")
+                        st.dataframe(export_df.head())
+
+                        # 7. Create the file download button
+                        csv = export_df.to_csv(index=False).encode('utf-8')
+                        st.download_button(
+                            label="⬇️ Download CSV File",
+                            data=csv,
+                            file_name=f"pipe_slice_elev_{export_elev}.csv",
+                            mime="text/csv",
+                            type="primary"
+                        )
+                    else:
+                        st.warning(f"No pipes intersect elevation {export_elev}. (Check if the elevation is deeper than your design lengths).")
+                else:
+                    st.error("No project data found.")
             
 with tab_maps:
     st.subheader("Map & Spatial Visualizations")
