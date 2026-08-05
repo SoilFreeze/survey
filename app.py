@@ -241,7 +241,7 @@ with st.sidebar:
             st.error(f"Error processing file: {e}")
             
 # 5. Main App Tabs
-tab_data, tab_maps, tab_qc = st.tabs(["Data & Analysis", "Map Visualizations", "QC & Single Hole"])
+tab_data, tab_maps, tab_qc, tab_explorer = st.tabs(["Data & Analysis", "Map Visualizations", "QC & Single Hole", "Survey Explorer"])
 
 with tab_data:
     st.subheader("Project Data Overview")
@@ -459,3 +459,61 @@ with tab_qc:
                     st.rerun()
             else:
                 st.info("No upload batches available to delete.")
+
+with tab_explorer:
+    st.subheader("📅 Date-Based Survey Explorer")
+    
+    # 1. Fetch available dates from the database
+    avail_dates = db.get_available_dates()
+    
+    if not avail_dates:
+        st.info("No downhole survey dates found in the database.")
+    else:
+        col1, col2 = st.columns([1, 2])
+        
+        with col1:
+            # 2. Select a date
+            selected_date = st.selectbox("Select Survey Date:", options=avail_dates)
+            
+            # 3. Fetch and display the holes surveyed on that date
+            date_holes = db.get_holes_by_date(selected_date)
+            
+            st.success(f"Found {len(date_holes)} surveys on this date.")
+            with st.expander("View Included Holes", expanded=True):
+                # Display as a clean comma-separated list
+                st.write(", ".join(date_holes))
+                
+        with col2:
+            if date_holes:
+                # 4. Select a specific hole to visualize
+                selected_hole = st.selectbox("Select a Hole to generate its deviation graph:", options=date_holes)
+                
+                if st.button("Generate 3-Panel Graph", type="primary"):
+                    with st.spinner("Calculating trajectories and rendering graph..."):
+                        holes_df, surveys_df = db.get_all_data()
+                        
+                        # Grab the base design data for this specific hole
+                        hole_row = holes_df[holes_df['clean_id'] == selected_hole]
+                        
+                        if not hole_row.empty:
+                            hole_row = hole_row.iloc[0]
+                            
+                            # Filter the survey data down to just this hole
+                            hole_surveys = surveys_df[surveys_df['hole_id'] == selected_hole]
+                            
+                            # Calculate the full trajectory paths (Baseline + All Survey Dates)
+                            comparison_df = math.calculate_single_hole_all_versions(hole_row, hole_surveys)
+                            
+                            # Generate the 3-panel plot using the visualizer
+                            fig = vis.plot_hole_comparison(
+                                comparison_df=comparison_df, 
+                                hole_id=selected_hole,
+                                show_casing=True
+                            )
+                            
+                            if fig:
+                                st.pyplot(fig)
+                            else:
+                                st.error("Failed to generate plot data.")
+                        else:
+                            st.error(f"Hole {selected_hole} not found in the primary design table.")
