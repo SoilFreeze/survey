@@ -279,8 +279,8 @@ class BigQueryDB:
         self.client.delete_table(temp_table, not_found_ok=True)
         return len(bq_df)
 
-    def import_downhole(self, df, survey_type, date_override=None):
-        """Deletes existing survey data ONLY for the holes in this file, then uploads new points."""
+    def import_downhole(self, df, survey_type, date_override=None, overwrite_mode="Append"):
+        """Deletes existing survey data based on mode, then uploads new points."""
         if df.empty or not self.client: return 0, []
         
         final_date = date_override if date_override else datetime.now().strftime("%Y-%m-%d")
@@ -306,20 +306,36 @@ class BigQueryDB:
         if not unique_holes:
             return 0, []
             
-        # 3. Clear out old data ONLY for the specific holes in this file on this date
-        delete_query = f"""
-            DELETE FROM `{self.dataset}.surveys`
-            WHERE project_id = @project_id 
-              AND survey_type = @survey_type 
-              AND upload_date = CAST(@upload_date AS DATE)
-              AND hole_id IN UNNEST(@hole_ids)
-        """
-        params = [
-            bigquery.ScalarQueryParameter("project_id", "STRING", self.active_project_id),
-            bigquery.ScalarQueryParameter("survey_type", "STRING", survey_type),
-            bigquery.ScalarQueryParameter("upload_date", "STRING", final_date),
-            bigquery.ArrayQueryParameter("hole_ids", "STRING", unique_holes)
-        ]
+        # 3. Handle Deletion based on the user's selected mode
+        if overwrite_mode == "Overwrite":
+            # Wipe all historical surveys for these specific holes
+            delete_query = f"""
+                DELETE FROM `{self.dataset}.surveys`
+                WHERE project_id = @project_id 
+                  AND survey_type = @survey_type 
+                  AND hole_id IN UNNEST(@hole_ids)
+            """
+            params = [
+                bigquery.ScalarQueryParameter("project_id", "STRING", self.active_project_id),
+                bigquery.ScalarQueryParameter("survey_type", "STRING", survey_type),
+                bigquery.ArrayQueryParameter("hole_ids", "STRING", unique_holes)
+            ]
+        else:
+            # Append mode: only wipe the same-day data to prevent exact duplicates
+            delete_query = f"""
+                DELETE FROM `{self.dataset}.surveys`
+                WHERE project_id = @project_id 
+                  AND survey_type = @survey_type 
+                  AND upload_date = CAST(@upload_date AS DATE)
+                  AND hole_id IN UNNEST(@hole_ids)
+            """
+            params = [
+                bigquery.ScalarQueryParameter("project_id", "STRING", self.active_project_id),
+                bigquery.ScalarQueryParameter("survey_type", "STRING", survey_type),
+                bigquery.ScalarQueryParameter("upload_date", "STRING", final_date),
+                bigquery.ArrayQueryParameter("hole_ids", "STRING", unique_holes)
+            ]
+            
         self._execute_query(delete_query, params)
 
         # 4. Standardize required columns
@@ -341,9 +357,8 @@ class BigQueryDB:
         job = self.client.load_table_from_dataframe(bq_df, f"{self.dataset}.surveys")
         job.result()
         
-        # Return the row count AND the list of unique holes so the UI can prove it
         return len(bq_df), unique_holes
-
+        
     def get_surveyed_ids(self):
         query = f"SELECT DISTINCT hole_id FROM `{self.dataset}.surveys` WHERE project_id = @pid ORDER BY hole_id"
         params = [bigquery.ScalarQueryParameter("pid", "STRING", self.active_project_id)]
