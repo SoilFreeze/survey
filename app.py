@@ -249,6 +249,9 @@ with st.sidebar:
                                 rows_inserted = db.import_pipe_details(df)
                                 st.success(f"Successfully updated {rows_inserted} Pipe Details!")
             
+        except Exception as e:
+            st.error(f"Error processing file: {e}")
+
 # 5. Main App Tabs
 tab_data, tab_maps, tab_qc, tab_explorer = st.tabs(["Data & Analysis", "Map Visualizations", "QC & Single Hole", "Survey Explorer"])
 
