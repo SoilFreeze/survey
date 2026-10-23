@@ -143,6 +143,14 @@ class SurveyVisualizer:
         # --- NEW ELEVATION LIMITS ---
         min_elev = comparison_df['elev'].min()
         max_elev = comparison_df['elev'].max()
+        
+        # Calculate the bottom limit based on the actual drilled boring, ignoring empty baseline space
+        actual_surveys = comparison_df[comparison_df['status'] != 'Baseline']
+        if not actual_surveys.empty:
+            min_elev = actual_surveys['elev'].min()
+        else:
+            min_elev = comparison_df['elev'].min()
+            
         bottom_limit = np.floor(min_elev / 5.0) * 5.0
         top_limit = np.ceil(max_elev / 5.0) * 5.0
         
