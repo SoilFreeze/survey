@@ -157,7 +157,10 @@ class SurveyVisualizer:
         # --- RESTORED FIGURE & AXES INITIALIZATION ---
         if plan_view_only: fig, ax_plan = plt.subplots(figsize=(10, 10)); axs = [ax_plan]
         else: fig, axs = plt.subplots(1, 3, figsize=(18, 6))
-        fig.suptitle(f"Comparison: Hole {hole_id}", fontsize=16)
+        
+        # --- NEW TITLE WITH DYNAMIC TOP ELEVATION ---
+        top_elev = comparison_df['elev'].max()
+        fig.suptitle(f"Comparison: Hole {hole_id} - Top of Pipe (Elev: {top_elev:.2f})", fontsize=16)
         
         # --- UPDATED FORMAT FUNCTION ---
         def format_ax(ax, title, xlabel, ylabel, is_profile=False):
