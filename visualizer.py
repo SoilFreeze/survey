@@ -177,18 +177,18 @@ class SurveyVisualizer:
                 c = 'blue'; ls = '-.'; marker = 's'; lw = 2.5; z = 25
             else:
                 c = pipe_map.get(status, 'black'); ls = '-'; marker = '.'; lw = 1.5; z = 15
-            
+                       
             data = comparison_df[comparison_df['status'] == status]
             if data.empty: continue
             axs[0].plot(data['dev_east'], data['dev_north'], color=c, linestyle=ls, marker=marker, markersize=4, linewidth=lw, label=status, zorder=z)
             if not plan_view_only:
-                axs[1].plot(data['dev_east'], data['depth'], color=c, linestyle=ls, marker=marker, markersize=4, linewidth=lw, zorder=z)
-                axs[2].plot(data['dev_north'], data['depth'], color=c, linestyle=ls, marker=marker, markersize=4, linewidth=lw, zorder=z)
+                axs[1].plot(data['dev_east'], data['elev'], color=c, linestyle=ls, marker=marker, markersize=4, linewidth=lw, zorder=z)
+                axs[2].plot(data['dev_north'], data['elev'], color=c, linestyle=ls, marker=marker, markersize=4, linewidth=lw, zorder=z)
 
         format_ax(axs[0], "Plan View", "Dev East", "Dev North"); axs[0].set_aspect('equal')
         if not plan_view_only:
-            format_ax(axs[1], "East Dev", "Dev (ft)", "Depth", True)
-            format_ax(axs[2], "North Dev", "Dev (ft)", "Depth", True)
+            format_ax(axs[1], "East Dev", "Dev (ft)", "Elevation", False)
+            format_ax(axs[2], "North Dev", "Dev (ft)", "Elevation", False)
             axs[2].legend(loc='center right', bbox_to_anchor=(1.4, 0.5))
         else: axs[0].legend(loc='upper right')
         
@@ -211,12 +211,12 @@ class SurveyVisualizer:
             sub = batch_df[batch_df['id'] == hid]
             c = colors[idx]
             axs[0].plot(sub['dev_east'], sub['dev_north'], color=c, lw=1.5, alpha=0.8, label=str(hid))
-            axs[1].plot(sub['dev_east'], sub['depth'], color=c, lw=1.5, alpha=0.8)
-            axs[2].plot(sub['dev_north'], sub['depth'], color=c, lw=1.5, alpha=0.8)
+            axs[1].plot(sub['dev_east'], sub['elev'], color=c, lw=1.5, alpha=0.8)
+            axs[2].plot(sub['dev_north'], sub['elev'], color=c, lw=1.5, alpha=0.8)
         
         for ax in axs:
             ax.grid(True); ax.axhline(0, c='k'); ax.axvline(0, c='k')
-            if ax != axs[0]: ax.invert_yaxis()
+           
         
         axs[0].set_title("Plan View"); axs[0].set_aspect('equal'); axs[0].set_xlim(-limit, limit); axs[0].set_ylim(-limit, limit)
         axs[1].set_title("East Dev"); axs[1].set_xlim(-limit, limit)
