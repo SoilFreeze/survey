@@ -133,31 +133,34 @@ class SurveyVisualizer:
                 max_e = max(max_e, ndf['rel_east'].abs().max())
                 
         # --- Existing Deviation Limits ---
+        # --- Existing Deviation Limits ---
         max_dev = max(max_n, max_e); limit = 2.0
         if max_dev > 2.0: limit = 2.0 + (np.ceil((max_dev - 2.0) / 0.25) * 0.25)
         dev_interval = 0.5; 
         if limit > 3.0: dev_interval = 1.0
         if limit > 8.0: dev_interval = 2.0
         
-        # --- ADD THESE NEW ELEVATION LIMITS ---
+        # --- NEW ELEVATION LIMITS ---
         min_elev = comparison_df['elev'].min()
         max_elev = comparison_df['elev'].max()
         bottom_limit = np.floor(min_elev / 5.0) * 5.0
         top_limit = np.ceil(max_elev / 5.0) * 5.0
         
-        # --- UPDATE THE FORMAT FUNCTION ---
+        # --- RESTORED FIGURE & AXES INITIALIZATION ---
+        if plan_view_only: fig, ax_plan = plt.subplots(figsize=(10, 10)); axs = [ax_plan]
+        else: fig, axs = plt.subplots(1, 3, figsize=(18, 6))
+        fig.suptitle(f"Comparison: Hole {hole_id}", fontsize=16)
+        
+        # --- UPDATED FORMAT FUNCTION ---
         def format_ax(ax, title, xlabel, ylabel, is_profile=False):
             ax.set_title(title, fontsize=12, pad=10); ax.set_xlabel(xlabel); ax.set_ylabel(ylabel)
             ax.grid(True, which='major', color='#D9D9D9', linestyle='-'); ax.xaxis.set_major_locator(ticker.MultipleLocator(dev_interval))
             
             if is_profile: 
-                # Lock X to deviation, bind Y to the 5ft elevation intervals
                 ax.set_xlim(-limit, limit)
                 ax.set_ylim(bottom_limit, top_limit)
-                # Only draw the vertical center line (Dev = 0), not the horizontal Elevation = 0 line
                 ax.axvline(0, color='black', linewidth=1.5, zorder=2)
             else: 
-                # Plan view gets locked into a perfect square with a full crosshair
                 ax.set_xlim(-limit, limit); ax.set_ylim(-limit, limit); ax.yaxis.set_major_locator(ticker.MultipleLocator(dev_interval))
                 ax.axhline(0, color='black', linewidth=1.5, zorder=2); ax.axvline(0, color='black', linewidth=1.5, zorder=2)
                 
