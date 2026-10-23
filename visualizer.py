@@ -131,28 +131,35 @@ class SurveyVisualizer:
                 ndf = data['df']
                 max_n = max(max_n, ndf['rel_north'].abs().max())
                 max_e = max(max_e, ndf['rel_east'].abs().max())
+                
+        # --- Existing Deviation Limits ---
         max_dev = max(max_n, max_e); limit = 2.0
         if max_dev > 2.0: limit = 2.0 + (np.ceil((max_dev - 2.0) / 0.25) * 0.25)
         dev_interval = 0.5; 
         if limit > 3.0: dev_interval = 1.0
         if limit > 8.0: dev_interval = 2.0
-        max_depth = comparison_df['depth'].max(); depth_interval = 20.0
         
-        if plan_view_only: fig, ax_plan = plt.subplots(figsize=(10, 10)); axs = [ax_plan]
-        else: fig, axs = plt.subplots(1, 3, figsize=(18, 6))
-        fig.suptitle(f"Comparison: Hole {hole_id}", fontsize=16)
+        # --- ADD THESE NEW ELEVATION LIMITS ---
+        min_elev = comparison_df['elev'].min()
+        max_elev = comparison_df['elev'].max()
+        bottom_limit = np.floor(min_elev / 5.0) * 5.0
+        top_limit = np.ceil(max_elev / 5.0) * 5.0
         
+        # --- UPDATE THE FORMAT FUNCTION ---
         def format_ax(ax, title, xlabel, ylabel, is_profile=False):
             ax.set_title(title, fontsize=12, pad=10); ax.set_xlabel(xlabel); ax.set_ylabel(ylabel)
             ax.grid(True, which='major', color='#D9D9D9', linestyle='-'); ax.xaxis.set_major_locator(ticker.MultipleLocator(dev_interval))
             
             if is_profile: 
-                # Locks the X-axis for deviation, but allows the Y-axis to auto-scale to your elevations
+                # Lock X to deviation, bind Y to the 5ft elevation intervals
                 ax.set_xlim(-limit, limit)
-                ax.yaxis.set_major_locator(ticker.MultipleLocator(depth_interval))
+                ax.set_ylim(bottom_limit, top_limit)
+                # Only draw the vertical center line (Dev = 0), not the horizontal Elevation = 0 line
+                ax.axvline(0, color='black', linewidth=1.5, zorder=2)
             else: 
-                # Plan view gets locked into a perfect square
+                # Plan view gets locked into a perfect square with a full crosshair
                 ax.set_xlim(-limit, limit); ax.set_ylim(-limit, limit); ax.yaxis.set_major_locator(ticker.MultipleLocator(dev_interval))
+                ax.axhline(0, color='black', linewidth=1.5, zorder=2); ax.axvline(0, color='black', linewidth=1.5, zorder=2)
                 
             ax.axhline(0, color='black', linewidth=1.5, zorder=2); ax.axvline(0, color='black', linewidth=1.5, zorder=2)
 
@@ -210,10 +217,18 @@ class SurveyVisualizer:
         if batch_df.empty: return None
         max_dev = max(batch_df['dev_north'].abs().max(), batch_df['dev_east'].abs().max())
         limit = 2.0 if max_dev < 2 else 2.0 + (np.ceil((max_dev - 2.0) / 0.25) * 0.25)
+        
+        # --- ADD THESE NEW ELEVATION LIMITS ---
+        min_elev = batch_df['elev'].min()
+        max_elev = batch_df['elev'].max()
+        bottom_limit = np.floor(min_elev / 5.0) * 5.0
+        top_limit = np.ceil(max_elev / 5.0) * 5.0
+
         fig, axs = plt.subplots(1, 3, figsize=(18, 6))
         fig.suptitle(f"Batch Analysis: {date_str}", fontsize=16)
         holes = batch_df['id'].unique()
         colors = plt.cm.jet(np.linspace(0, 1, len(holes)))
+        
         for idx, hid in enumerate(holes):
             sub = batch_df[batch_df['id'] == hid]
             c = colors[idx]
@@ -222,12 +237,18 @@ class SurveyVisualizer:
             axs[2].plot(sub['dev_north'], sub['elev'], color=c, lw=1.5, alpha=0.8)
         
         for ax in axs:
-            ax.grid(True); ax.axhline(0, c='k'); ax.axvline(0, c='k')
-           
+            ax.grid(True)
+            ax.axvline(0, c='k')
+            # Only draw horizontal line for the Plan View (axs[0])
+            if ax == axs[0]:
+                ax.axhline(0, c='k') 
         
         axs[0].set_title("Plan View"); axs[0].set_aspect('equal'); axs[0].set_xlim(-limit, limit); axs[0].set_ylim(-limit, limit)
-        axs[1].set_title("East Dev"); axs[1].set_xlim(-limit, limit)
-        axs[2].set_title("North Dev"); axs[2].set_xlim(-limit, limit)
+        
+        # Apply the new elevation limits to the profile views
+        axs[1].set_title("East Dev"); axs[1].set_xlim(-limit, limit); axs[1].set_ylim(bottom_limit, top_limit)
+        axs[2].set_title("North Dev"); axs[2].set_xlim(-limit, limit); axs[2].set_ylim(bottom_limit, top_limit)
+        
         if len(holes) <= 20: axs[0].legend(loc='upper right')
         plt.tight_layout()
         return fig
