@@ -142,11 +142,18 @@ class SurveyVisualizer:
         else: fig, axs = plt.subplots(1, 3, figsize=(18, 6))
         fig.suptitle(f"Comparison: Hole {hole_id}", fontsize=16)
         
-        def format_ax(ax, title, xlabel, ylabel, invert_y=False):
+        def format_ax(ax, title, xlabel, ylabel, is_profile=False):
             ax.set_title(title, fontsize=12, pad=10); ax.set_xlabel(xlabel); ax.set_ylabel(ylabel)
             ax.grid(True, which='major', color='#D9D9D9', linestyle='-'); ax.xaxis.set_major_locator(ticker.MultipleLocator(dev_interval))
-            if invert_y: ax.invert_yaxis(); ax.set_xlim(-limit, limit); ax.yaxis.set_major_locator(ticker.MultipleLocator(depth_interval))
-            else: ax.set_xlim(-limit, limit); ax.set_ylim(-limit, limit); ax.yaxis.set_major_locator(ticker.MultipleLocator(dev_interval))
+            
+            if is_profile: 
+                # Locks the X-axis for deviation, but allows the Y-axis to auto-scale to your elevations
+                ax.set_xlim(-limit, limit)
+                ax.yaxis.set_major_locator(ticker.MultipleLocator(depth_interval))
+            else: 
+                # Plan view gets locked into a perfect square
+                ax.set_xlim(-limit, limit); ax.set_ylim(-limit, limit); ax.yaxis.set_major_locator(ticker.MultipleLocator(dev_interval))
+                
             ax.axhline(0, color='black', linewidth=1.5, zorder=2); ax.axvline(0, color='black', linewidth=1.5, zorder=2)
 
         if show_neighbor and neighbors_dict:
@@ -185,10 +192,10 @@ class SurveyVisualizer:
                 axs[1].plot(data['dev_east'], data['elev'], color=c, linestyle=ls, marker=marker, markersize=4, linewidth=lw, zorder=z)
                 axs[2].plot(data['dev_north'], data['elev'], color=c, linestyle=ls, marker=marker, markersize=4, linewidth=lw, zorder=z)
 
-        format_ax(axs[0], "Plan View", "Dev East", "Dev North"); axs[0].set_aspect('equal')
+        format_ax(axs[0], "Plan View", "Dev East", "Dev North", False); axs[0].set_aspect('equal')
         if not plan_view_only:
-            format_ax(axs[1], "East Dev", "Dev (ft)", "Elevation", False)
-            format_ax(axs[2], "North Dev", "Dev (ft)", "Elevation", False)
+            format_ax(axs[1], "East Dev", "Dev (ft)", "Elevation", True)
+            format_ax(axs[2], "North Dev", "Dev (ft)", "Elevation", True)
             axs[2].legend(loc='center right', bbox_to_anchor=(1.4, 0.5))
         else: axs[0].legend(loc='upper right')
         
