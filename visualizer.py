@@ -160,7 +160,7 @@ class SurveyVisualizer:
         
         # --- NEW TITLE WITH DYNAMIC TOP ELEVATION ---
         top_elev = comparison_df['elev'].max()
-        fig.suptitle(f"Comparison: Hole {hole_id} - Top of Pipe (Elev: {top_elev:.2f})", fontsize=16)
+        fig.suptitle(f"Comparison: Hole {hole_id} - Top of Pipe Elev: {top_elev:.2f}", fontsize=16)
         
         # --- UPDATED FORMAT FUNCTION ---
         def format_ax(ax, title, xlabel, ylabel, is_profile=False):
