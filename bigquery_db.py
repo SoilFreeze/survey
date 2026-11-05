@@ -167,7 +167,7 @@ class BigQueryDB:
             st.error(f"Failed to fetch stats: {e}")
             return {"total": 0, "top": 0, "downhole": 0}
     
-    def import_baseline(self, df):
+    def import_baseline(self, df, overwrite_mode="Append"):
         """Replaces existing holes with new baseline design data."""
         if df.empty or not self.client: return 0
         
@@ -185,6 +185,23 @@ class BigQueryDB:
         
         bq_df = df[['hole_id', 'project_id', 'design_n', 'design_e', 'design_z', 'design_az', 'design_inc', 'design_length']]
         bq_df = bq_df.drop_duplicates(subset=['hole_id'], keep='last')
+        
+        # NEW: Handle Overwrite Mode by deleting abandoned pipes
+        if overwrite_mode == "Overwrite":
+            new_holes = bq_df['hole_id'].astype(str).tolist()
+            
+            # Delete downhole surveys for abandoned pipes
+            del_surveys_query = f"DELETE FROM `{self.dataset}.surveys` WHERE project_id = @pid AND hole_id NOT IN UNNEST(@hole_ids)"
+            # Delete the abandoned pipes from the baseline
+            del_holes_query = f"DELETE FROM `{self.dataset}.holes` WHERE project_id = @pid AND hole_id NOT IN UNNEST(@hole_ids)"
+            
+            params = [
+                bigquery.ScalarQueryParameter("pid", "STRING", self.active_project_id),
+                bigquery.ArrayQueryParameter("hole_ids", "STRING", new_holes)
+            ]
+            
+            self._execute_query(del_surveys_query, params)
+            self._execute_query(del_holes_query, params)
         
         temp_table = f"{self.dataset}.temp_holes_{datetime.now().strftime('%Y%m%d%H%M%S')}"
         job = self.client.load_table_from_dataframe(bq_df, temp_table)
