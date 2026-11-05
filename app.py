@@ -336,17 +336,23 @@ with tab_data:
                             slice_df['Absolute_East'] = slice_df['East_New'] + orig_e
                             slice_df['Absolute_North'] = slice_df['North_New'] + orig_n
                             
-                            export_df = slice_df[['ID', 'Target_Elev', 'Absolute_North', 'Absolute_East', 'Survey_Status', 'Deviation', 'Deviation_Percent']].copy()
+                            # ADDED: East_New and North_New for TempX and TempY
+                            export_df = slice_df[['ID', 'Target_Elev', 'Absolute_North', 'Absolute_East', 'East_New', 'North_New', 'Survey_Status', 'Deviation', 'Deviation_Percent']].copy()
                             export_df = export_df.rename(columns={
                                 'Target_Elev': 'Elevation',
                                 'Absolute_North': 'Northing',
                                 'Absolute_East': 'Easting',
+                                'East_New': 'TempX',
+                                'North_New': 'TempY',
                                 'Survey_Status': 'Data_Source',
                                 'Deviation': 'Deviation_From_Design_ft'
                             })
                             
+                            # Round the coordinates for a clean TEMP/W import
                             export_df['Northing'] = export_df['Northing'].round(3)
                             export_df['Easting'] = export_df['Easting'].round(3)
+                            export_df['TempX'] = export_df['TempX'].round(3)
+                            export_df['TempY'] = export_df['TempY'].round(3)
                             export_df['Deviation_From_Design_ft'] = export_df['Deviation_From_Design_ft'].round(3)
 
                             # Convert to CSV string and write directly into the ZIP
