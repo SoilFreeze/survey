@@ -612,14 +612,13 @@ with tab_explorer:
                                 show_casing=True
                             )
                             
-
-                        if fig:
-                            st.pyplot(fig)
+                            if fig:
+                                st.pyplot(fig)
+                            else:
+                                st.error("Failed to generate plot data.")
                         else:
-                            st.error("Failed to generate plot data.")
-                    else:
-                        st.error(f"Hole {selected_hole} not found in the primary design table.")
-                        
+                            st.error(f"Hole {selected_hole} not found in the primary design table.")
+                            
     # -----------------------------------------
     # NEW BATCH EXPORT FEATURE
     # -----------------------------------------
@@ -627,65 +626,66 @@ with tab_explorer:
     st.subheader("📦 Batch Export Deviation Graphs")
     st.write("Generate and download a ZIP file containing individual PNG graphs for multiple pipes.")
     
-    export_mode = st.radio("Select timeframe for batch export:", ["Specific Date", "Since Date (Inclusive)"])
-    
-    # We reuse the 'avail_dates' list already queried at the top of this tab
-    target_date = st.selectbox("Select Target Date:", options=avail_dates, key="batch_date")
-    
-    if st.button(f"Generate & Zip Graphs", type="primary"):
-        with st.spinner(f"Querying data and rendering graphs..."):
-            holes_df, surveys_df = db.get_all_data()
-            
-            # Filter survey data based on the chosen mode
-            if export_mode == "Specific Date":
-                filtered_surveys = surveys_df[surveys_df['upload_date'] == target_date]
-            else: 
-                filtered_surveys = surveys_df[surveys_df['upload_date'] >= target_date]
+    # Check if avail_dates has data before allowing the export
+    if avail_dates:
+        export_mode = st.radio("Select timeframe for batch export:", ["Specific Date", "Since Date (Inclusive)"])
+        
+        target_date = st.selectbox("Select Target Date:", options=avail_dates, key="batch_date")
+        
+        if st.button(f"Generate & Zip Graphs", type="primary"):
+            with st.spinner(f"Querying data and rendering graphs..."):
+                holes_df, surveys_df = db.get_all_data()
                 
-            target_holes = filtered_surveys['hole_id'].unique().tolist()
-            
-            if not target_holes:
-                st.warning("No holes found for the selected timeframe.")
-            else:
-                st.info(f"Generating {len(target_holes)} graphs. This may take a minute...")
-                
-                # Create an in-memory zip file
-                zip_buffer = io.BytesIO()
-                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                # Filter survey data based on the chosen mode
+                if export_mode == "Specific Date":
+                    filtered_surveys = surveys_df[surveys_df['upload_date'] == target_date]
+                else: 
+                    filtered_surveys = surveys_df[surveys_df['upload_date'] >= target_date]
                     
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
-                    
-                    for i, hole_id in enumerate(target_holes):
-                        status_text.text(f"Rendering {hole_id}.png ({i+1}/{len(target_holes)})...")
-                        
-                        # Fetch the base design data for the hole
-                        hole_row = holes_df[holes_df['clean_id'] == hole_id]
-                        if hole_row.empty: continue
-                        
-                        # We pass ALL surveys for the hole so the graph shows the full history
-                        hole_surveys = surveys_df[surveys_df['hole_id'] == hole_id]
-                        
-                        comp_df = math.calculate_single_hole_all_versions(hole_row.iloc[0], hole_surveys)
-                        
-                        if not comp_df.empty:
-                            img_buffer = io.BytesIO()
-                            # Use the existing visualizer method to render silently to the buffer
-                            vis.save_static_graph_to_file(comp_df, hole_id, filepath=img_buffer, show_casing=True)
-                            
-                            # Save it inside the zip file exactly as requested: "101.png"
-                            zip_file.writestr(f"{hole_id}.png", img_buffer.getvalue())
-                            
-                        # Update UI progress
-                        progress_bar.progress((i + 1) / len(target_holes))
-                        
-                status_text.text(f"Successfully bundled {len(target_holes)} graphs!")
+                target_holes = filtered_surveys['hole_id'].unique().tolist()
                 
-                # Present the final download button
-                st.download_button(
-                    label="⬇️ Download Batch Graphs (ZIP)",
-                    data=zip_buffer.getvalue(),
-                    file_name=f"Batch_Graphs_{target_date}.zip",
-                    mime="application/zip",
-                    type="primary"
-                )
+                if not target_holes:
+                    st.warning("No holes found for the selected timeframe.")
+                else:
+                    st.info(f"Generating {len(target_holes)} graphs. This may take a minute...")
+                    
+                    # Create an in-memory zip file
+                    zip_buffer = io.BytesIO()
+                    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                        
+                        progress_bar = st.progress(0)
+                        status_text = st.empty()
+                        
+                        for i, hole_id in enumerate(target_holes):
+                            status_text.text(f"Rendering {hole_id}.png ({i+1}/{len(target_holes)})...")
+                            
+                            # Fetch the base design data for the hole
+                            hole_row = holes_df[holes_df['clean_id'] == hole_id]
+                            if hole_row.empty: continue
+                            
+                            # We pass ALL surveys for the hole so the graph shows the full history
+                            hole_surveys = surveys_df[surveys_df['hole_id'] == hole_id]
+                            
+                            comp_df = math.calculate_single_hole_all_versions(hole_row.iloc[0], hole_surveys)
+                            
+                            if not comp_df.empty:
+                                img_buffer = io.BytesIO()
+                                # Use the existing visualizer method to render silently to the buffer
+                                vis.save_static_graph_to_file(comp_df, hole_id, filepath=img_buffer, show_casing=True)
+                                
+                                # Save it inside the zip file exactly as requested: "101.png"
+                                zip_file.writestr(f"{hole_id}.png", img_buffer.getvalue())
+                                
+                            # Update UI progress
+                            progress_bar.progress((i + 1) / len(target_holes))
+                            
+                    status_text.text(f"Successfully bundled {len(target_holes)} graphs!")
+                    
+                    # Present the final download button
+                    st.download_button(
+                        label="⬇️ Download Batch Graphs (ZIP)",
+                        data=zip_buffer.getvalue(),
+                        file_name=f"Batch_Graphs_{target_date}.zip",
+                        mime="application/zip",
+                        type="primary"
+                    )
