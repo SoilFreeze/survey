@@ -171,6 +171,9 @@ with st.sidebar:
                                     # No conflicts detected, bypass the UI and update directly
                                     rows = db.update_top_survey(df, file_date)
                                     st.success(f"Successfully updated {rows} records silently!")
+                                    import time
+                                    time.sleep(1.5) # Pauses briefly so you can actually read the success message
+                                    st.rerun() # Refreshes the dashboard stats
                                     
                     # Step 3: Render Conflict Resolution UI
                     if 'conflict_df' in st.session_state:
