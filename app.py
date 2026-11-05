@@ -221,27 +221,32 @@ with st.sidebar:
                     if 'conflict_df' in st.session_state: del st.session_state.conflict_df
                     if 'clean_inserts_df' in st.session_state: del st.session_state.clean_inserts_df
                     
-                    # NEW UI: Ask for overwrite mode if it is a Pipe import
-                    pipe_overwrite_mode = "Append"
-                    if import_type == "Pipe":
+                    # Ask for overwrite mode if it is a Pipe or Baseline import
+                    overwrite_mode = "Append"
+                    if import_type in ["Pipe", "Baseline"]:
                         st.markdown("### Import Settings")
+                        
+                        if import_type == "Baseline":
+                            help_text = "Append updates coordinates for existing pipes and adds new ones. Overwrite will ALSO delete any pipes from the database that are not in this new file."
+                        else:
+                            help_text = "Append adds this as a new survey date. Overwrite will delete all older downhole surveys for the specific pipes in this file."
+                            
                         mode_choice = st.radio(
                             "Survey History Action:",
-                            ["Append (Keep History)", "Overwrite (Replace All Previous)"],
-                            help="Append will add this as a new survey. Overwrite will delete all older downhole surveys for the specific pipes in this file."
+                            ["Append (Keep History / Update)", "Overwrite (Total Replace)"],
+                            help=help_text
                         )
-                        # Extract just the first word ('Append' or 'Overwrite') for the database function
-                        pipe_overwrite_mode = mode_choice.split()[0]
+                        overwrite_mode = mode_choice.split()[0]
                     
                     if st.button(f"Confirm & Upload {import_type} to BigQuery"):
                         with st.spinner("Uploading to BigQuery..."):
                             if import_type == "Pipe":
-                                rows_inserted, unique_holes = db.import_downhole(df, import_type, file_date, overwrite_mode=pipe_overwrite_mode)
+                                rows_inserted, unique_holes = db.import_downhole(df, import_type, file_date, overwrite_mode=overwrite_mode)
                                 st.success(f"Successfully processed {len(unique_holes)} specific holes ({rows_inserted} rows) for {import_type}!")
                                 st.info(f"Holes updated: {', '.join(unique_holes)}")
                                 
                             elif import_type == "Baseline":
-                                rows_inserted = db.import_baseline(df)
+                                rows_inserted = db.import_baseline(df, overwrite_mode=overwrite_mode)
                                 st.success(f"Successfully uploaded {rows_inserted} Baseline records!")
                                 
                             elif import_type == "Pipe Details":
