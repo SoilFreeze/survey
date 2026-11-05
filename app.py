@@ -322,9 +322,20 @@ with tab_data:
                 # 4. Run the full trajectory calculations once
                 traj_df = math.calculate_trajectory(holes_df, surveys_df)
                 
-                # --- NEW: Pre-calculate date mappings ---
-                top_dates = holes_df.set_index('clean_id')['top_survey_date'].to_dict() if 'top_survey_date' in holes_df.columns else {}
-                dh_dates = surveys_df.groupby('hole_id')['upload_date'].max().to_dict() if not surveys_df.empty else {}
+                # --- BULLETPROOF DATE MAPPING ---
+                # Force all IDs to text strings and remove hidden spaces to guarantee a match
+                holes_df['clean_id'] = holes_df['clean_id'].astype(str).str.strip()
+                if not surveys_df.empty:
+                    surveys_df['hole_id'] = surveys_df['hole_id'].astype(str).str.strip()
+
+                top_dates = {}
+                if 'top_survey_date' in holes_df.columns:
+                    top_dates = holes_df.drop_duplicates(subset=['clean_id']).set_index('clean_id')['top_survey_date'].to_dict()
+                    
+                dh_dates = {}
+                if not surveys_df.empty:
+                    dh_dates = surveys_df.groupby('hole_id')['upload_date'].max().to_dict()
+                # --------------------------------
 
                 # 5. Define the target elevations
                 target_elevs = [268.0, 256.0, 244.0, 232.0, 220.0]
@@ -358,12 +369,23 @@ with tab_data:
                             export_df['TempY'] = export_df['TempY'].round(3)
                             export_df['Deviation_From_Design_ft'] = export_df['Deviation_From_Design_ft'].round(3)
 
-                            # --- NEW: Append the Survey Dates ---
-                            export_df['Top_Survey_Date'] = export_df['ID'].map(top_dates).fillna('N/A')
+                            # --- BULLETPROOF DATE ASSIGNMENT ---
+                            export_df['safe_id'] = export_df['ID'].astype(str).str.strip()
+                            
+                            export_df['Top_Survey_Date'] = export_df['safe_id'].map(top_dates).fillna('N/A')
+                            
+                            # Catch any 'None' or 'NaN' text that slipped through BigQuery
+                            export_df.loc[export_df['Top_Survey_Date'].isnull(), 'Top_Survey_Date'] = 'N/A'
+                            export_df.loc[export_df['Top_Survey_Date'] == 'None', 'Top_Survey_Date'] = 'N/A'
+                            export_df.loc[export_df['Top_Survey_Date'] == 'NaT', 'Top_Survey_Date'] = 'N/A'
+                            
                             export_df['Downhole_Survey_Date'] = export_df.apply(
-                                lambda row: dh_dates.get(row['ID'], 'Unknown') if row['Data_Source'] in ['Pipe', 'Casing'] else 'N/A', 
+                                lambda row: dh_dates.get(row['safe_id'], 'Unknown') if row['Data_Source'] in ['Pipe', 'Casing'] else 'N/A', 
                                 axis=1
                             )
+                            
+                            export_df = export_df.drop(columns=['safe_id'])
+                            # -----------------------------------
 
                             # Convert to CSV string and write directly into the ZIP
                             csv_str = export_df.to_csv(index=False)
