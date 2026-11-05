@@ -13,10 +13,9 @@ class SurveyMath:
         match = re.search(r'(\d+)', s)
         if not match: return s
         number = match.group(1)
-        suffix = ""
-        parts = s.split(number)
-        if len(parts) > 1 and 'A' in parts[-1]: suffix = "a"
-        return f"{prefix}{number}{suffix}"
+        
+        # Return only the prefix and the number portion, ignoring all pipe type letters
+        return f"{prefix}{number}"
 
     def normalize_columns(self, df, col_map):
         new_cols = {}
@@ -390,3 +389,4 @@ class SurveyMath:
             "Total_Deviation (ft)": round(curr_dev, 2),
             "Percent Dev": round(percent_dev, 2)
         }
+
