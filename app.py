@@ -321,6 +321,10 @@ with tab_data:
 
                 # 4. Run the full trajectory calculations once
                 traj_df = math.calculate_trajectory(holes_df, surveys_df)
+                
+                # --- NEW: Pre-calculate date mappings ---
+                top_dates = holes_df.set_index('clean_id')['top_survey_date'].to_dict() if 'top_survey_date' in holes_df.columns else {}
+                dh_dates = surveys_df.groupby('hole_id')['upload_date'].max().to_dict() if not surveys_df.empty else {}
 
                 # 5. Define the target elevations
                 target_elevs = [268.0, 256.0, 244.0, 232.0, 220.0]
@@ -336,7 +340,6 @@ with tab_data:
                             slice_df['Absolute_East'] = slice_df['East_New'] + orig_e
                             slice_df['Absolute_North'] = slice_df['North_New'] + orig_n
                             
-                            # ADDED: East_New and North_New for TempX and TempY
                             export_df = slice_df[['ID', 'Target_Elev', 'Absolute_North', 'Absolute_East', 'East_New', 'North_New', 'Survey_Status', 'Deviation', 'Deviation_Percent']].copy()
                             export_df = export_df.rename(columns={
                                 'Target_Elev': 'Elevation',
@@ -348,12 +351,19 @@ with tab_data:
                                 'Deviation': 'Deviation_From_Design_ft'
                             })
                             
-                            # Round the coordinates for a clean TEMP/W import
+                            # Round the coordinates
                             export_df['Northing'] = export_df['Northing'].round(3)
                             export_df['Easting'] = export_df['Easting'].round(3)
                             export_df['TempX'] = export_df['TempX'].round(3)
                             export_df['TempY'] = export_df['TempY'].round(3)
                             export_df['Deviation_From_Design_ft'] = export_df['Deviation_From_Design_ft'].round(3)
+
+                            # --- NEW: Append the Survey Dates ---
+                            export_df['Top_Survey_Date'] = export_df['ID'].map(top_dates).fillna('N/A')
+                            export_df['Downhole_Survey_Date'] = export_df.apply(
+                                lambda row: dh_dates.get(row['ID'], 'Unknown') if row['Data_Source'] in ['Pipe', 'Casing'] else 'N/A', 
+                                axis=1
+                            )
 
                             # Convert to CSV string and write directly into the ZIP
                             csv_str = export_df.to_csv(index=False)
