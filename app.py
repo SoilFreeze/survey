@@ -312,6 +312,7 @@ with tab_data:
                 holes_df = holes_df[(holes_df['n_base'] != 0.0) & (holes_df['e_base'] != 0.0)].copy()
                 holes_df.loc[holes_df['n_top'] == 0.0, 'n_top'] = holes_df['n_base']
                 holes_df.loc[holes_df['e_top'] == 0.0, 'e_top'] = holes_df['e_base']
+                holes_df.loc[holes_df['z_top'] == 0.0, 'z_top'] = holes_df['z_base']  # <-- ADD THIS LINE
 
                 # 3. Shift coordinates to local 0,0 for accurate math engine geometry
                 holes_df['n_base'] = holes_df['n_base'] - orig_n
