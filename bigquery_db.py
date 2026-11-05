@@ -114,6 +114,7 @@ class BigQueryDB:
                 COALESCE(actual_e, design_e, 0.0) AS e_top,
                 COALESCE(actual_z, design_z, 0.0) AS z_top,
                 CASE WHEN actual_n IS NOT NULL THEN 1 ELSE 0 END AS has_top_survey,
+                CAST(top_survey_date AS STRING) AS top_survey_date,
                 COALESCE(design_az, 0.0) AS design_az,
                 COALESCE(design_inc, 0.0) AS design_inc,
                 COALESCE(design_length, 0.0) AS design_len
