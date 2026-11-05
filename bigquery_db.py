@@ -144,7 +144,7 @@ class BigQueryDB:
         except Exception as e:
             print(f"BigQuery fetch failed: {e}")
             return pd.DataFrame(), pd.DataFrame()
-
+            
     def get_project_stats(self):
         """Fetches quick summary statistics for the active project."""
         if not self.client: return {"total": 0, "top": 0, "downhole": 0}
