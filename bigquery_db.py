@@ -227,9 +227,20 @@ class BigQueryDB:
         """In BigQuery, our MERGE query in import_baseline handles safe upserts automatically."""
         return self.import_baseline(df)
 
-    def update_top_survey(self, df, date_str):
+    def update_top_survey(self, df, date_str, overwrite_mode="Append"):
         """Updates actual coordinates, or inserts them if the hole does not yet exist."""
         if df.empty or not self.client: return 0
+        
+        # --- NEW: Handle Overwrite Mode by nullifying all existing top surveys first ---
+        if overwrite_mode == "Overwrite":
+            reset_query = f"""
+                UPDATE `{self.dataset}.holes`
+                SET actual_n = NULL, actual_e = NULL, actual_z = NULL, top_survey_date = NULL
+                WHERE project_id = @pid
+            """
+            params = [bigquery.ScalarQueryParameter("pid", "STRING", self.active_project_id)]
+            self._execute_query(reset_query, params)
+            
         df['project_id'] = self.active_project_id
         df['top_survey_date'] = pd.to_datetime(date_str).strftime('%Y-%m-%d')
         
