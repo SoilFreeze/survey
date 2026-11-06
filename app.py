@@ -365,6 +365,16 @@ with tab_data:
     st.subheader("📥 Batch Export Elevation Slices")
     st.write("Generate CSV coordinates for elevations 268, 256, 244, 232, and 220, downloaded as a single ZIP file.")
 
+    # --- NEW: Add the Export Mode Toggle ---
+    slice_mode = st.radio(
+        "Data Source Mode:",
+        [
+            "Standard (Use any available as-built data)", 
+            "Strict (Only use as-built if BOTH Top and Downhole surveys exist; otherwise Baseline)"
+        ],
+        help="Standard uses a Top Survey even if the pipe hasn't been surveyed downhole yet. Strict reverts to pure Baseline if a pipe is missing either survey."
+    )
+
     if st.button("Calculate Batch Slices", type="primary"):
         with st.spinner("Calculating trajectories and slicing elevations..."):
             holes_df, surveys_df = db.get_all_data()
@@ -382,7 +392,30 @@ with tab_data:
                 holes_df = holes_df[(holes_df['n_base'] != 0.0) & (holes_df['e_base'] != 0.0)].copy()
                 holes_df.loc[holes_df['n_top'] == 0.0, 'n_top'] = holes_df['n_base']
                 holes_df.loc[holes_df['e_top'] == 0.0, 'e_top'] = holes_df['e_base']
-                holes_df.loc[holes_df['z_top'] == 0.0, 'z_top'] = holes_df['z_base']  # <-- ADD THIS LINE
+                holes_df.loc[holes_df['z_top'] == 0.0, 'z_top'] = holes_df['z_base']
+
+                # --- NEW: Strict Mode Logic ---
+                if slice_mode.startswith("Strict"):
+                    holes_with_top = holes_df[holes_df['has_top_survey'] == 1]['clean_id'].astype(str).tolist()
+                    holes_with_dh = surveys_df['hole_id'].astype(str).unique().tolist() if not surveys_df.empty else []
+                    
+                    # A pipe must have BOTH to be considered valid for as-built export
+                    valid_holes = set(holes_with_top).intersection(set(holes_with_dh))
+                    
+                    # For anything else, force the top coordinates back to the baseline design
+                    invalid_mask = ~holes_df['clean_id'].astype(str).isin(valid_holes)
+                    holes_df.loc[invalid_mask, 'n_top'] = holes_df.loc[invalid_mask, 'n_base']
+                    holes_df.loc[invalid_mask, 'e_top'] = holes_df.loc[invalid_mask, 'e_base']
+                    holes_df.loc[invalid_mask, 'z_top'] = holes_df.loc[invalid_mask, 'z_base']
+                    
+                    # Nullify the date for pipes forced back to baseline
+                    if 'top_survey_date' in holes_df.columns:
+                        holes_df.loc[invalid_mask, 'top_survey_date'] = 'N/A'
+                    
+                    # Strip away any stray downhole surveys that don't have a top survey
+                    if not surveys_df.empty:
+                        surveys_df = surveys_df[surveys_df['hole_id'].astype(str).isin(valid_holes)]
+                # ------------------------------
 
                 # 3. Shift coordinates to local 0,0 for accurate math engine geometry
                 holes_df['n_base'] = holes_df['n_base'] - orig_n
