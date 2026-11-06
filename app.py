@@ -92,7 +92,7 @@ with st.sidebar:
             # 3. Combine all uploaded files into one master DataFrame
             combined_dfs = []
             
-            def extract_date_from_filename(filename):
+        def extract_date_from_filename(filename):
             match = re.search(r'(\d{4})[._-](\d{2})[._-](\d{2})', filename)
             if match: return f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
             match = re.search(r'(\d{2})[._-](\d{2})[._-](\d{4})', filename)
