@@ -83,11 +83,38 @@ with st.sidebar:
     import_type = st.selectbox("Select Data Type to Import:", 
                                ["Baseline", "Top Survey", "Pipe", "Pipe Details"])
     
-    uploaded_file = st.file_uploader(f"Upload {import_type} CSV", type=["csv"])
+    # 1. Enable multiple files (drag-and-drop batch upload)
+    uploaded_files = st.file_uploader(f"Upload {import_type} CSV(s)", type=["csv"], accept_multiple_files=True)
     
-    if uploaded_file is not None:
+    # 2. Check if the list of files is not empty
+    if uploaded_files:
         try:
-            df = pd.read_csv(uploaded_file)
+            # 3. Combine all uploaded files into one master DataFrame
+            combined_dfs = []
+            
+            def extract_date_from_filename(filename):
+                match = re.search(r'(\d{4})[._-](\d{2})[._-](\d{2})', filename)
+                if match: return f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
+                match = re.search(r'(\d{2})[._-](\d{2})[._-](\d{4})', filename)
+                if match: return f"{match.group(3)}-{match.group(1)}-{match.group(2)}"
+                return pd.Timestamp.now().strftime("%Y-%m-%d")
+                
+            # Grab the survey date from the first file in the batch
+            file_date = extract_date_from_filename(uploaded_files[0].name)
+            
+            for file in uploaded_files:
+                temp_df = pd.read_csv(file)
+                
+                # Failsafe: if individual files are just named "818.csv" without an ID column inside
+                if 'ID' not in temp_df.columns and 'id' not in [c.lower() for c in temp_df.columns]:
+                    match = re.search(r'(\d+)', file.name)
+                    if match:
+                        temp_df['ID'] = match.group(1)
+                        
+                combined_dfs.append(temp_df)
+                
+            # Stitch them all together
+            df = pd.concat(combined_dfs, ignore_index=True)
             
             col_map = {
                 'id': ["id", "hole_id", "holeid", "hole", "point", "name", "station", "loc", "pipe"],
@@ -105,7 +132,7 @@ with st.sidebar:
                 st.error(f"Could not find 'ID' column. Found: {list(df.columns)}")
             else:
                 df['clean_ID'] = df['ID'].apply(math.standardize_id)
-                st.write("Preview of Normalized Data:")
+                st.write(f"Preview of Combined Data ({len(uploaded_files)} files processed):")
                 st.dataframe(df.head())
                 
                 def extract_date_from_filename(filename):
