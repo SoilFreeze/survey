@@ -105,6 +105,9 @@ with st.sidebar:
             for file in uploaded_files:
                 temp_df = pd.read_csv(file)
                 
+                # --- NEW: Instantly drop duplicate or junk columns ---
+                temp_df = temp_df.loc[:, ~temp_df.columns.duplicated()]
+                
                 # Failsafe: if individual files are just named "818.csv" without an ID column inside
                 if 'ID' not in temp_df.columns and 'id' not in [c.lower() for c in temp_df.columns]:
                     match = re.search(r'(\d+)', file.name)
