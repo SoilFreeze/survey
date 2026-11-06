@@ -141,65 +141,83 @@ with st.sidebar:
                 df['clean_ID'] = df['ID'].apply(math.standardize_id)
                 st.write(f"Preview of Combined Data ({len(uploaded_files)} files processed):")
                 st.dataframe(df.head())
+                
                 # ---------------------------------------------------------
                 # NEW LOGIC: TOP SURVEY INTERACTIVE CONFLICT RESOLUTION
                 # ---------------------------------------------------------
                 if import_type == "Top Survey":
+                    st.markdown("### Import Settings")
+                    mode_choice = st.radio(
+                        "Top Survey Action:",
+                        ["Append (Check for Conflicts / Update)", "Overwrite (Wipe All Existing Top Surveys)"],
+                        help="Append checks existing coordinates and updates them. Overwrite deletes ALL existing top survey data before importing this file."
+                    )
+                    top_overwrite_mode = mode_choice.split()[0]
+                    
                     # Step 1: Initial Check Button
                     if 'conflict_df' not in st.session_state:
-                        if st.button("Check & Upload Top Survey"):
-                            with st.spinner("Checking database for coordinate conflicts..."):
-                                
-                                # Query BigQuery for existing raw actual coordinates
-                                query = f"""
-                                    SELECT hole_id, actual_n as db_n, actual_e as db_e, actual_z as db_z
-                                    FROM `{db.dataset}.holes`
-                                    WHERE project_id = @pid AND hole_id IN UNNEST(@ids)
-                                """
-                                params = [
-                                    bigquery.ScalarQueryParameter("pid", "STRING", db.active_project_id),
-                                    bigquery.ArrayQueryParameter("ids", "STRING", df['clean_ID'].astype(str).tolist())
-                                ]
-                                db_df = db.client.query(query, job_config=bigquery.QueryJobConfig(query_parameters=params)).to_dataframe()
-                                
-                                # Merge the new upload with the database data
-                                merged = df.merge(db_df, left_on='clean_ID', right_on='hole_id', how='left')
-                                conflicts = []
-                                clean_inserts = []
-                                
-                                # Sort holes into conflicts vs clean updates
-                                for _, row in merged.iterrows():
-                                    # If DB is empty, NULL, or 0.0, it's a clean insert
-                                    if pd.isna(row['db_n']) or row['db_n'] == 0.0:
-                                        clean_inserts.append(row['clean_ID'])
-                                    else:
-                                        # Calculate absolute differences (allowing 0.01ft floating point variance)
-                                        n_diff = abs(row['North'] - row['db_n'])
-                                        e_diff = abs(row['East'] - row['db_e'])
-                                        z_diff = abs(row['Elev'] - row['db_z'])
-                                        
-                                        if n_diff > 0.01 or e_diff > 0.01 or z_diff > 0.01:
-                                            conflicts.append(row)
-                                        else:
-                                            # Identical to database, overwrite silently
-                                            clean_inserts.append(row['clean_ID']) 
-                                            
-                                st.session_state.clean_inserts_df = df[df['clean_ID'].isin(clean_inserts)].copy()
-                                
-                                # Step 2: Trigger UI if conflicts exist
-                                if conflicts:
-                                    conflicts_df = pd.DataFrame(conflicts)
-                                    conflicts_df['Keep_New_Upload'] = True # Default to the new spreadsheet data
-                                    st.session_state.conflict_df = conflicts_df
-                                    st.rerun() 
-                                else:
-                                    # No conflicts detected, bypass the UI and update directly
-                                    rows = db.update_top_survey(df, file_date)
-                                    st.success(f"Successfully updated {rows} records silently!")
+                        if top_overwrite_mode == "Overwrite":
+                            if st.button("Confirm & Overwrite Top Surveys", type="primary"):
+                                with st.spinner("Wiping old top surveys and uploading new..."):
+                                    rows = db.update_top_survey(df, file_date, overwrite_mode="Overwrite")
+                                    st.success(f"Successfully erased old data and updated {rows} records!")
                                     import time
-                                    time.sleep(1.5) # Pauses briefly so you can actually read the success message
-                                    st.rerun() # Refreshes the dashboard stats
+                                    time.sleep(1.5)
+                                    st.rerun()
+                        else:
+                            if st.button("Check & Upload Top Survey"):
+                                with st.spinner("Checking database for coordinate conflicts..."):
                                     
+                                    # Query BigQuery for existing raw actual coordinates
+                                    query = f"""
+                                        SELECT hole_id, actual_n as db_n, actual_e as db_e, actual_z as db_z
+                                        FROM `{db.dataset}.holes`
+                                        WHERE project_id = @pid AND hole_id IN UNNEST(@ids)
+                                    """
+                                    params = [
+                                        bigquery.ScalarQueryParameter("pid", "STRING", db.active_project_id),
+                                        bigquery.ArrayQueryParameter("ids", "STRING", df['clean_ID'].astype(str).tolist())
+                                    ]
+                                    db_df = db.client.query(query, job_config=bigquery.QueryJobConfig(query_parameters=params)).to_dataframe()
+                                    
+                                    # Merge the new upload with the database data
+                                    merged = df.merge(db_df, left_on='clean_ID', right_on='hole_id', how='left')
+                                    conflicts = []
+                                    clean_inserts = []
+                                    
+                                    # Sort holes into conflicts vs clean updates
+                                    for _, row in merged.iterrows():
+                                        # If DB is empty, NULL, or 0.0, it's a clean insert
+                                        if pd.isna(row['db_n']) or row['db_n'] == 0.0:
+                                            clean_inserts.append(row['clean_ID'])
+                                        else:
+                                            # Calculate absolute differences (allowing 0.01ft floating point variance)
+                                            n_diff = abs(row['North'] - row['db_n'])
+                                            e_diff = abs(row['East'] - row['db_e'])
+                                            z_diff = abs(row['Elev'] - row['db_z'])
+                                            
+                                            if n_diff > 0.01 or e_diff > 0.01 or z_diff > 0.01:
+                                                conflicts.append(row)
+                                            else:
+                                                # Identical to database, overwrite silently
+                                                clean_inserts.append(row['clean_ID']) 
+                                                
+                                    st.session_state.clean_inserts_df = df[df['clean_ID'].isin(clean_inserts)].copy()
+                                    
+                                    # Step 2: Trigger UI if conflicts exist
+                                    if conflicts:
+                                        conflicts_df = pd.DataFrame(conflicts)
+                                        conflicts_df['Keep_New_Upload'] = True # Default to the new spreadsheet data
+                                        st.session_state.conflict_df = conflicts_df
+                                        st.rerun() 
+                                    else:
+                                        # No conflicts detected, bypass the UI and update directly
+                                        rows = db.update_top_survey(df, file_date, overwrite_mode="Append")
+                                        st.success(f"Successfully updated {rows} records silently!")
+                                        import time
+                                        time.sleep(1.5)
+                                        st.rerun()
+                                        
                     # Step 3: Render Conflict Resolution UI
                     if 'conflict_df' in st.session_state:
                         st.warning(f"⚠️ Found {len(st.session_state.conflict_df)} conflicting coordinates!")
@@ -225,7 +243,7 @@ with st.sidebar:
                                 ]
                                 
                                 if not final_df.empty:
-                                    rows = db.update_top_survey(final_df, file_date)
+                                    rows = db.update_top_survey(final_df, file_date, overwrite_mode="Append")
                                     st.success(f"Successfully resolved conflicts and updated {rows} total records!")
                                 else:
                                     st.info("No records were selected for update.")
@@ -233,6 +251,8 @@ with st.sidebar:
                                 # Clean up session state
                                 del st.session_state.conflict_df
                                 del st.session_state.clean_inserts_df
+                                import time
+                                time.sleep(1.5)
                                 st.rerun()
                                 
                         with col2:
