@@ -102,24 +102,6 @@ with st.sidebar:
             # Grab the survey date from the first file in the batch
             file_date = extract_date_from_filename(uploaded_files[0].name)
             
-            for file in uploaded_files:
-                temp_df = pd.read_csv(file)
-                
-                # --- NEW: Instantly drop duplicate or junk columns ---
-                temp_df = temp_df.loc[:, ~temp_df.columns.duplicated()]
-                
-                # Failsafe: if individual files are just named "818.csv" without an ID column inside
-                if 'ID' not in temp_df.columns and 'id' not in [c.lower() for c in temp_df.columns]:
-                    match = re.search(r'(\d+)', file.name)
-                    if match:
-                        temp_df['ID'] = match.group(1)
-                        
-                combined_dfs.append(temp_df)
-                
-            # Stitch them all together
-            df = pd.concat(combined_dfs, ignore_index=True)
-            
-            # ... (inside the batch upload block) ...
             col_map = {
                 'id': ["id", "hole_id", "holeid", "hole", "point", "name", "station", "loc", "pipe"],
                 'n': ["north", "northing", "n", "y", "northings", "cady"],
@@ -130,10 +112,28 @@ with st.sidebar:
                 'depth': ['length', 'depth', 'dist', 'distance', 'md']
             }
             
-            df = math.normalize_columns(df, col_map)
-            
-            # --- ADD THIS LINE: Drop duplicates created during the renaming process ---
-            df = df.loc[:, ~df.columns.duplicated()]
+            for file in uploaded_files:
+                temp_df = pd.read_csv(file)
+                
+                # Instantly drop exact duplicate columns (e.g., two columns named 'Length')
+                temp_df = temp_df.loc[:, ~temp_df.columns.duplicated()]
+                
+                # Normalize column names for THIS file before concatenation
+                temp_df = math.normalize_columns(temp_df, col_map)
+                
+                # Drop duplicates created during the renaming process (e.g., 'depth' and 'length' both became 'Length')
+                temp_df = temp_df.loc[:, ~temp_df.columns.duplicated()]
+                
+                # Failsafe: if individual files are just named "818.csv" without an ID column inside
+                if 'ID' not in temp_df.columns:
+                    match = re.search(r'(\d+)', file.name)
+                    if match:
+                        temp_df['ID'] = match.group(1)
+                        
+                combined_dfs.append(temp_df)
+                
+            # Stitch them all together safely now that column names are uniform
+            df = pd.concat(combined_dfs, ignore_index=True)
             
             if 'ID' not in df.columns:
                 st.error(f"Could not find 'ID' column. Found: {list(df.columns)}")
@@ -141,16 +141,6 @@ with st.sidebar:
                 df['clean_ID'] = df['ID'].apply(math.standardize_id)
                 st.write(f"Preview of Combined Data ({len(uploaded_files)} files processed):")
                 st.dataframe(df.head())
-                
-                def extract_date_from_filename(filename):
-                    match = re.search(r'(\d{4})[._-](\d{2})[._-](\d{2})', filename)
-                    if match: return f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
-                    match = re.search(r'(\d{2})[._-](\d{2})[._-](\d{4})', filename)
-                    if match: return f"{match.group(3)}-{match.group(1)}-{match.group(2)}"
-                    return pd.Timestamp.now().strftime("%Y-%m-%d")
-                    
-                file_date = extract_date_from_filename(uploaded_file.name)
-                
                 # ---------------------------------------------------------
                 # NEW LOGIC: TOP SURVEY INTERACTIVE CONFLICT RESOLUTION
                 # ---------------------------------------------------------
