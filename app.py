@@ -99,10 +99,21 @@ with st.sidebar:
                 if match: return f"{match.group(3)}-{match.group(1)}-{match.group(2)}"
                 return pd.Timestamp.now().strftime("%Y-%m-%d")
                 
+            # --- PUT THIS BACK: The dictionary that maps column names ---
+            col_map = {
+                'id': ["id", "hole_id", "holeid", "hole", "point", "name", "station", "loc", "pipe"],
+                'n': ["north", "northing", "n", "y", "northings", "cady"],
+                'e': ["east", "easting", "e", "x", "eastings", "cadx"],
+                'z': ["elev", "elevation", "z", "rl", "level", "height"],
+                'az': ['azimuth', 'azi', 'az', 'dir', 'direction'],
+                'inc': ['inclination', 'inc', 'dip', 'angle'],
+                'depth': ['length', 'depth', 'dist', 'distance', 'md']
+            }
+            
             for file in uploaded_files:
                 temp_df = pd.read_csv(file)
                 
-                # --- NEW: Extract the specific date for THIS file and attach it ---
+                # Extract the specific date for THIS file and attach it
                 temp_df['file_date'] = extract_date_from_filename(file.name)
                 
                 # Instantly drop exact duplicate columns
