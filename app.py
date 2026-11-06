@@ -119,6 +119,7 @@ with st.sidebar:
             # Stitch them all together
             df = pd.concat(combined_dfs, ignore_index=True)
             
+            # ... (inside the batch upload block) ...
             col_map = {
                 'id': ["id", "hole_id", "holeid", "hole", "point", "name", "station", "loc", "pipe"],
                 'n': ["north", "northing", "n", "y", "northings", "cady"],
@@ -130,6 +131,9 @@ with st.sidebar:
             }
             
             df = math.normalize_columns(df, col_map)
+            
+            # --- ADD THIS LINE: Drop duplicates created during the renaming process ---
+            df = df.loc[:, ~df.columns.duplicated()]
             
             if 'ID' not in df.columns:
                 st.error(f"Could not find 'ID' column. Found: {list(df.columns)}")
