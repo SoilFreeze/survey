@@ -92,233 +92,233 @@ with st.sidebar:
             # 3. Combine all uploaded files into one master DataFrame
             combined_dfs = []
             
-        def extract_date_from_filename(filename):
-            match = re.search(r'(\d{4})[._-](\d{2})[._-](\d{2})', filename)
-            if match: return f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
-            match = re.search(r'(\d{2})[._-](\d{2})[._-](\d{4})', filename)
-            if match: return f"{match.group(3)}-{match.group(1)}-{match.group(2)}"
-            return pd.Timestamp.now().strftime("%Y-%m-%d")
-            
-        for file in uploaded_files:
-            temp_df = pd.read_csv(file)
-            
-            # --- NEW: Extract the specific date for THIS file and attach it ---
-            temp_df['file_date'] = extract_date_from_filename(file.name)
-            
-            # Instantly drop exact duplicate columns
-            temp_df = temp_df.loc[:, ~temp_df.columns.duplicated()]
-            
-            # Normalize column names for THIS file before concatenation
-            temp_df = math.normalize_columns(temp_df, col_map)
-            
-            # Drop duplicates created during the renaming process
-            temp_df = temp_df.loc[:, ~temp_df.columns.duplicated()]
-            
-            # Failsafe: if individual files are just named "818.csv" without an ID column inside
-            if 'ID' not in temp_df.columns:
-                match = re.search(r'(\d+)', file.name)
-                if match:
-                    temp_df['ID'] = match.group(1)
-                    
-            combined_dfs.append(temp_df)
-            
-        # Stitch them all together safely now that column names are uniform
-        df = pd.concat(combined_dfs, ignore_index=True)
-        
-        if 'ID' not in df.columns:
-            st.error(f"Could not find 'ID' column. Found: {list(df.columns)}")
-        else:
-            df['clean_ID'] = df['ID'].apply(math.standardize_id)
-            st.write(f"Preview of Combined Data ({len(uploaded_files)} files processed):")
-            st.dataframe(df.head())
-            
-            # ---------------------------------------------------------
-            # NEW LOGIC: TOP SURVEY INTERACTIVE CONFLICT RESOLUTION
-            # ---------------------------------------------------------
-            if import_type == "Top Survey":
-                st.markdown("### Import Settings")
-                mode_choice = st.radio(
-                    "Top Survey Action:",
-                    ["Append (Check for Conflicts / Update)", "Overwrite (Wipe All Existing Top Surveys)"],
-                    help="Append checks existing coordinates and updates them. Overwrite deletes ALL existing top survey data before importing this file."
-                )
-                top_overwrite_mode = mode_choice.split()[0]
+            def extract_date_from_filename(filename):
+                match = re.search(r'(\d{4})[._-](\d{2})[._-](\d{2})', filename)
+                if match: return f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
+                match = re.search(r'(\d{2})[._-](\d{2})[._-](\d{4})', filename)
+                if match: return f"{match.group(3)}-{match.group(1)}-{match.group(2)}"
+                return pd.Timestamp.now().strftime("%Y-%m-%d")
                 
-                # Step 1: Initial Check Button
-                if 'conflict_df' not in st.session_state:
-                    if top_overwrite_mode == "Overwrite":
-                        if st.button("Confirm & Overwrite Top Surveys", type="primary"):
-                            with st.spinner("Wiping old top surveys and uploading new..."):
-                                rows = 0
-                                first_iter = True
-                                for d in df['file_date'].unique():
-                                    sub = df[df['file_date'] == d].copy()
-                                    mode = "Overwrite" if first_iter else "Append"
-                                    rows += db.update_top_survey(sub, str(d), overwrite_mode=mode)
-                                    first_iter = False
-                                st.success(f"Successfully erased old data and updated {rows} records!")
-                                import time
-                                time.sleep(1.5)
-                                st.rerun()
-                    else:
-                        if st.button("Check & Upload Top Survey"):
-                            with st.spinner("Checking database for coordinate conflicts..."):
-                                
-                                # Query BigQuery for existing raw actual coordinates
-                                query = f"""
-                                    SELECT hole_id, actual_n as db_n, actual_e as db_e, actual_z as db_z
-                                    FROM `{db.dataset}.holes`
-                                    WHERE project_id = @pid AND hole_id IN UNNEST(@ids)
-                                """
-                                params = [
-                                    bigquery.ScalarQueryParameter("pid", "STRING", db.active_project_id),
-                                    bigquery.ArrayQueryParameter("ids", "STRING", df['clean_ID'].astype(str).tolist())
-                                ]
-                                db_df = db.client.query(query, job_config=bigquery.QueryJobConfig(query_parameters=params)).to_dataframe()
-                                
-                                # Merge the new upload with the database data
-                                merged = df.merge(db_df, left_on='clean_ID', right_on='hole_id', how='left')
-                                conflicts = []
-                                clean_inserts = []
-                                
-                                # Sort holes into conflicts vs clean updates
-                                for _, row in merged.iterrows():
-                                    # If DB is empty, NULL, or 0.0, it's a clean insert
-                                    if pd.isna(row['db_n']) or row['db_n'] == 0.0:
-                                        clean_inserts.append(row['clean_ID'])
-                                    else:
-                                        # Calculate absolute differences (allowing 0.01ft floating point variance)
-                                        n_diff = abs(row['North'] - row['db_n'])
-                                        e_diff = abs(row['East'] - row['db_e'])
-                                        z_diff = abs(row['Elev'] - row['db_z'])
-                                        
-                                        if n_diff > 0.01 or e_diff > 0.01 or z_diff > 0.01:
-                                            conflicts.append(row)
-                                        else:
-                                            # Identical to database, overwrite silently
-                                            clean_inserts.append(row['clean_ID']) 
-                                            
-                                st.session_state.clean_inserts_df = df[df['clean_ID'].isin(clean_inserts)].copy()
-                                
-                                # Step 2: Trigger UI if conflicts exist
-                                if conflicts:
-                                    conflicts_df = pd.DataFrame(conflicts)
-                                    conflicts_df['Keep_New_Upload'] = True # Default to the new spreadsheet data
-                                    st.session_state.conflict_df = conflicts_df
-                                    st.rerun() 
-                                else:
-                                    # No conflicts detected, bypass the UI and update directly
+            for file in uploaded_files:
+                temp_df = pd.read_csv(file)
+                
+                # --- NEW: Extract the specific date for THIS file and attach it ---
+                temp_df['file_date'] = extract_date_from_filename(file.name)
+                
+                # Instantly drop exact duplicate columns
+                temp_df = temp_df.loc[:, ~temp_df.columns.duplicated()]
+                
+                # Normalize column names for THIS file before concatenation
+                temp_df = math.normalize_columns(temp_df, col_map)
+                
+                # Drop duplicates created during the renaming process
+                temp_df = temp_df.loc[:, ~temp_df.columns.duplicated()]
+                
+                # Failsafe: if individual files are just named "818.csv" without an ID column inside
+                if 'ID' not in temp_df.columns:
+                    match = re.search(r'(\d+)', file.name)
+                    if match:
+                        temp_df['ID'] = match.group(1)
+                        
+                combined_dfs.append(temp_df)
+                
+            # Stitch them all together safely now that column names are uniform
+            df = pd.concat(combined_dfs, ignore_index=True)
+            
+            if 'ID' not in df.columns:
+                st.error(f"Could not find 'ID' column. Found: {list(df.columns)}")
+            else:
+                df['clean_ID'] = df['ID'].apply(math.standardize_id)
+                st.write(f"Preview of Combined Data ({len(uploaded_files)} files processed):")
+                st.dataframe(df.head())
+                
+                # ---------------------------------------------------------
+                # NEW LOGIC: TOP SURVEY INTERACTIVE CONFLICT RESOLUTION
+                # ---------------------------------------------------------
+                if import_type == "Top Survey":
+                    st.markdown("### Import Settings")
+                    mode_choice = st.radio(
+                        "Top Survey Action:",
+                        ["Append (Check for Conflicts / Update)", "Overwrite (Wipe All Existing Top Surveys)"],
+                        help="Append checks existing coordinates and updates them. Overwrite deletes ALL existing top survey data before importing this file."
+                    )
+                    top_overwrite_mode = mode_choice.split()[0]
+                    
+                    # Step 1: Initial Check Button
+                    if 'conflict_df' not in st.session_state:
+                        if top_overwrite_mode == "Overwrite":
+                            if st.button("Confirm & Overwrite Top Surveys", type="primary"):
+                                with st.spinner("Wiping old top surveys and uploading new..."):
                                     rows = 0
+                                    first_iter = True
                                     for d in df['file_date'].unique():
                                         sub = df[df['file_date'] == d].copy()
-                                        rows += db.update_top_survey(sub, str(d), overwrite_mode="Append")
-                                    st.success(f"Successfully updated {rows} records silently!")
+                                        mode = "Overwrite" if first_iter else "Append"
+                                        rows += db.update_top_survey(sub, str(d), overwrite_mode=mode)
+                                        first_iter = False
+                                    st.success(f"Successfully erased old data and updated {rows} records!")
                                     import time
                                     time.sleep(1.5)
                                     st.rerun()
+                        else:
+                            if st.button("Check & Upload Top Survey"):
+                                with st.spinner("Checking database for coordinate conflicts..."):
                                     
-                # Step 3: Render Conflict Resolution UI
-                if 'conflict_df' in st.session_state:
-                    st.warning(f"⚠️ Found {len(st.session_state.conflict_df)} conflicting coordinates!")
-                    st.write("Existing database values differ from your upload. Uncheck **'Keep_New_Upload'** to discard the upload and keep the existing database values.")
-                    
-                    # Format the dataframe for the interactive data editor
-                    disp_df = st.session_state.conflict_df[['clean_ID', 'North', 'db_n', 'East', 'db_e', 'Keep_New_Upload']].copy()
-                    disp_df = disp_df.rename(columns={'North': 'New_North', 'db_n': 'Old_North', 'East': 'New_East', 'db_e': 'Old_East'})
-                    
-                    # Render the interactive grid
-                    edited_conflicts = st.data_editor(disp_df, use_container_width=True, hide_index=True)
-                    
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        if st.button("Finalize Upload", type="primary"):
-                            # Grab the IDs the user decided to keep from the new upload
-                            keep_new_ids = edited_conflicts[edited_conflicts['Keep_New_Upload'] == True]['clean_ID'].tolist()
-                            
-                            # Combine the conflict resolutions with the clean inserts
-                            final_df = df[
-                                (df['clean_ID'].isin(st.session_state.clean_inserts_df['clean_ID'])) | 
-                                (df['clean_ID'].isin(keep_new_ids))
-                            ]
-                            
-                            if not final_df.empty:
-                                rows = 0
-                                for d in final_df['file_date'].unique():
-                                    sub = final_df[final_df['file_date'] == d].copy()
-                                    rows += db.update_top_survey(sub, str(d), overwrite_mode="Append")
-                                st.success(f"Successfully resolved conflicts and updated {rows} total records!")
-                            else:
-                                st.info("No records were selected for update.")
-                                
-                            # Clean up session state
-                            del st.session_state.conflict_df
-                            del st.session_state.clean_inserts_df
-                            import time
-                            time.sleep(1.5)
-                            st.rerun()
-                            
-                    with col2:
-                        if st.button("Cancel Upload"):
-                            del st.session_state.conflict_df
-                            del st.session_state.clean_inserts_df
-                            st.rerun()
-                            
-            # ---------------------------------------------------------
-            # STANDARD LOGIC: ALL OTHER IMPORT TYPES
-            # ---------------------------------------------------------
-            else:
-                # Clear top survey session state if user switches dropdown menus
-                if 'conflict_df' in st.session_state: del st.session_state.conflict_df
-                if 'clean_inserts_df' in st.session_state: del st.session_state.clean_inserts_df
-                
-                # Ask for overwrite mode if it is a Pipe or Baseline import
-                overwrite_mode = "Append"
-                if import_type in ["Pipe", "Baseline"]:
-                    st.markdown("### Import Settings")
-                    
-                    if import_type == "Baseline":
-                        help_text = "Append updates coordinates for existing pipes and adds new ones. Overwrite will ALSO delete any pipes from the database that are not in this new file."
-                    else:
-                        help_text = "Append adds this as a new survey date. Overwrite will delete all older downhole surveys for the specific pipes in this file."
+                                    # Query BigQuery for existing raw actual coordinates
+                                    query = f"""
+                                        SELECT hole_id, actual_n as db_n, actual_e as db_e, actual_z as db_z
+                                        FROM `{db.dataset}.holes`
+                                        WHERE project_id = @pid AND hole_id IN UNNEST(@ids)
+                                    """
+                                    params = [
+                                        bigquery.ScalarQueryParameter("pid", "STRING", db.active_project_id),
+                                        bigquery.ArrayQueryParameter("ids", "STRING", df['clean_ID'].astype(str).tolist())
+                                    ]
+                                    db_df = db.client.query(query, job_config=bigquery.QueryJobConfig(query_parameters=params)).to_dataframe()
+                                    
+                                    # Merge the new upload with the database data
+                                    merged = df.merge(db_df, left_on='clean_ID', right_on='hole_id', how='left')
+                                    conflicts = []
+                                    clean_inserts = []
+                                    
+                                    # Sort holes into conflicts vs clean updates
+                                    for _, row in merged.iterrows():
+                                        # If DB is empty, NULL, or 0.0, it's a clean insert
+                                        if pd.isna(row['db_n']) or row['db_n'] == 0.0:
+                                            clean_inserts.append(row['clean_ID'])
+                                        else:
+                                            # Calculate absolute differences (allowing 0.01ft floating point variance)
+                                            n_diff = abs(row['North'] - row['db_n'])
+                                            e_diff = abs(row['East'] - row['db_e'])
+                                            z_diff = abs(row['Elev'] - row['db_z'])
+                                            
+                                            if n_diff > 0.01 or e_diff > 0.01 or z_diff > 0.01:
+                                                conflicts.append(row)
+                                            else:
+                                                # Identical to database, overwrite silently
+                                                clean_inserts.append(row['clean_ID']) 
+                                                
+                                    st.session_state.clean_inserts_df = df[df['clean_ID'].isin(clean_inserts)].copy()
+                                    
+                                    # Step 2: Trigger UI if conflicts exist
+                                    if conflicts:
+                                        conflicts_df = pd.DataFrame(conflicts)
+                                        conflicts_df['Keep_New_Upload'] = True # Default to the new spreadsheet data
+                                        st.session_state.conflict_df = conflicts_df
+                                        st.rerun() 
+                                    else:
+                                        # No conflicts detected, bypass the UI and update directly
+                                        rows = 0
+                                        for d in df['file_date'].unique():
+                                            sub = df[df['file_date'] == d].copy()
+                                            rows += db.update_top_survey(sub, str(d), overwrite_mode="Append")
+                                        st.success(f"Successfully updated {rows} records silently!")
+                                        import time
+                                        time.sleep(1.5)
+                                        st.rerun()
+                                        
+                    # Step 3: Render Conflict Resolution UI
+                    if 'conflict_df' in st.session_state:
+                        st.warning(f"⚠️ Found {len(st.session_state.conflict_df)} conflicting coordinates!")
+                        st.write("Existing database values differ from your upload. Uncheck **'Keep_New_Upload'** to discard the upload and keep the existing database values.")
                         
-                    mode_choice = st.radio(
-                        "Survey History Action:",
-                        ["Append (Keep History / Update)", "Overwrite (Total Replace)"],
-                        help=help_text
-                    )
-                    overwrite_mode = mode_choice.split()[0]
-                
-                if st.button(f"Confirm & Upload {import_type} to BigQuery"):
-                    with st.spinner("Uploading to BigQuery..."):
-                        if import_type == "Pipe":
-                            total_rows = 0
-                            all_holes = set()
-                            first_iter = True
-                            
-                            # Loop through each unique date found in the file names
-                            for d in df['file_date'].unique():
-                                sub_df = df[df['file_date'] == d].copy()
-                                mode = overwrite_mode if first_iter else "Append"
+                        # Format the dataframe for the interactive data editor
+                        disp_df = st.session_state.conflict_df[['clean_ID', 'North', 'db_n', 'East', 'db_e', 'Keep_New_Upload']].copy()
+                        disp_df = disp_df.rename(columns={'North': 'New_North', 'db_n': 'Old_North', 'East': 'New_East', 'db_e': 'Old_East'})
+                        
+                        # Render the interactive grid
+                        edited_conflicts = st.data_editor(disp_df, use_container_width=True, hide_index=True)
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if st.button("Finalize Upload", type="primary"):
+                                # Grab the IDs the user decided to keep from the new upload
+                                keep_new_ids = edited_conflicts[edited_conflicts['Keep_New_Upload'] == True]['clean_ID'].tolist()
                                 
-                                rows, holes = db.import_downhole(sub_df, import_type, str(d), overwrite_mode=mode)
-                                total_rows += rows
-                                all_holes.update(holes)
-                                first_iter = False
+                                # Combine the conflict resolutions with the clean inserts
+                                final_df = df[
+                                    (df['clean_ID'].isin(st.session_state.clean_inserts_df['clean_ID'])) | 
+                                    (df['clean_ID'].isin(keep_new_ids))
+                                ]
                                 
-                            st.success(f"Successfully processed {len(all_holes)} specific holes ({total_rows} rows) for {import_type}!")
-                            st.info(f"Holes updated: {', '.join(all_holes)}")
+                                if not final_df.empty:
+                                    rows = 0
+                                    for d in final_df['file_date'].unique():
+                                        sub = final_df[final_df['file_date'] == d].copy()
+                                        rows += db.update_top_survey(sub, str(d), overwrite_mode="Append")
+                                    st.success(f"Successfully resolved conflicts and updated {rows} total records!")
+                                else:
+                                    st.info("No records were selected for update.")
+                                    
+                                # Clean up session state
+                                del st.session_state.conflict_df
+                                del st.session_state.clean_inserts_df
+                                import time
+                                time.sleep(1.5)
+                                st.rerun()
+                                
+                        with col2:
+                            if st.button("Cancel Upload"):
+                                del st.session_state.conflict_df
+                                del st.session_state.clean_inserts_df
+                                st.rerun()
+                                
+                # ---------------------------------------------------------
+                # STANDARD LOGIC: ALL OTHER IMPORT TYPES
+                # ---------------------------------------------------------
+                else:
+                    # Clear top survey session state if user switches dropdown menus
+                    if 'conflict_df' in st.session_state: del st.session_state.conflict_df
+                    if 'clean_inserts_df' in st.session_state: del st.session_state.clean_inserts_df
+                    
+                    # Ask for overwrite mode if it is a Pipe or Baseline import
+                    overwrite_mode = "Append"
+                    if import_type in ["Pipe", "Baseline"]:
+                        st.markdown("### Import Settings")
+                        
+                        if import_type == "Baseline":
+                            help_text = "Append updates coordinates for existing pipes and adds new ones. Overwrite will ALSO delete any pipes from the database that are not in this new file."
+                        else:
+                            help_text = "Append adds this as a new survey date. Overwrite will delete all older downhole surveys for the specific pipes in this file."
                             
-                        elif import_type == "Baseline":
-                            rows_inserted = db.import_baseline(df, overwrite_mode=overwrite_mode)
-                            st.success(f"Successfully uploaded {rows_inserted} Baseline records!")
-                            
-                        elif import_type == "Pipe Details":
-                            df.rename(columns=lambda x: 'pipe_type' if x.strip().lower() == 'type' else x, inplace=True)
-                            rows_inserted = db.import_pipe_details(df)
-                            st.success(f"Successfully updated {rows_inserted} Pipe Details!")
-        
-    except Exception as e:
-        st.error(f"Error processing file: {e}")
+                        mode_choice = st.radio(
+                            "Survey History Action:",
+                            ["Append (Keep History / Update)", "Overwrite (Total Replace)"],
+                            help=help_text
+                        )
+                        overwrite_mode = mode_choice.split()[0]
+                    
+                    if st.button(f"Confirm & Upload {import_type} to BigQuery"):
+                        with st.spinner("Uploading to BigQuery..."):
+                            if import_type == "Pipe":
+                                total_rows = 0
+                                all_holes = set()
+                                first_iter = True
+                                
+                                # Loop through each unique date found in the file names
+                                for d in df['file_date'].unique():
+                                    sub_df = df[df['file_date'] == d].copy()
+                                    mode = overwrite_mode if first_iter else "Append"
+                                    
+                                    rows, holes = db.import_downhole(sub_df, import_type, str(d), overwrite_mode=mode)
+                                    total_rows += rows
+                                    all_holes.update(holes)
+                                    first_iter = False
+                                    
+                                st.success(f"Successfully processed {len(all_holes)} specific holes ({total_rows} rows) for {import_type}!")
+                                st.info(f"Holes updated: {', '.join(all_holes)}")
+                                
+                            elif import_type == "Baseline":
+                                rows_inserted = db.import_baseline(df, overwrite_mode=overwrite_mode)
+                                st.success(f"Successfully uploaded {rows_inserted} Baseline records!")
+                                
+                            elif import_type == "Pipe Details":
+                                df.rename(columns=lambda x: 'pipe_type' if x.strip().lower() == 'type' else x, inplace=True)
+                                rows_inserted = db.import_pipe_details(df)
+                                st.success(f"Successfully updated {rows_inserted} Pipe Details!")
+            
+        except Exception as e:
+            st.error(f"Error processing file: {e}")
 
 # 5. Main App Tabs
 tab_data, tab_maps, tab_qc, tab_explorer = st.tabs(["Data & Analysis", "Map Visualizations", "QC & Single Hole", "Survey Explorer"])
